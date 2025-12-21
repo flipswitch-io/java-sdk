@@ -71,7 +71,8 @@ public class FlipswitchProvider implements FeatureProvider {
 
         return ProviderEvaluation.<Boolean>builder()
                 .value(result)
-                .reason(flag.getStringValue() != null ? Reason.TARGETING_MATCH.toString() : Reason.DEFAULT.toString())
+                .variant(flag.getVariant())
+                .reason(flag.getReason())
                 .build();
     }
 
@@ -88,7 +89,8 @@ public class FlipswitchProvider implements FeatureProvider {
 
         return ProviderEvaluation.<String>builder()
                 .value(flag.getEffectiveValue())
-                .reason(flag.getStringValue() != null ? Reason.TARGETING_MATCH.toString() : Reason.DEFAULT.toString())
+                .variant(flag.getVariant())
+                .reason(flag.getReason())
                 .build();
     }
 
@@ -107,7 +109,8 @@ public class FlipswitchProvider implements FeatureProvider {
             int result = Integer.parseInt(flag.getEffectiveValue());
             return ProviderEvaluation.<Integer>builder()
                     .value(result)
-                    .reason(flag.getStringValue() != null ? Reason.TARGETING_MATCH.toString() : Reason.DEFAULT.toString())
+                    .variant(flag.getVariant())
+                    .reason(flag.getReason())
                     .build();
         } catch (NumberFormatException e) {
             return ProviderEvaluation.<Integer>builder()
@@ -134,7 +137,8 @@ public class FlipswitchProvider implements FeatureProvider {
             double result = Double.parseDouble(flag.getEffectiveValue());
             return ProviderEvaluation.<Double>builder()
                     .value(result)
-                    .reason(flag.getStringValue() != null ? Reason.TARGETING_MATCH.toString() : Reason.DEFAULT.toString())
+                    .variant(flag.getVariant())
+                    .reason(flag.getReason())
                     .build();
         } catch (NumberFormatException e) {
             return ProviderEvaluation.<Double>builder()
@@ -160,7 +164,8 @@ public class FlipswitchProvider implements FeatureProvider {
         // For object evaluation, return the string value wrapped in a Value
         return ProviderEvaluation.<Value>builder()
                 .value(new Value(flag.getEffectiveValue()))
-                .reason(flag.getStringValue() != null ? Reason.TARGETING_MATCH.toString() : Reason.DEFAULT.toString())
+                .variant(flag.getVariant())
+                .reason(flag.getReason())
                 .build();
     }
 

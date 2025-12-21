@@ -30,7 +30,7 @@ class FlipswitchProviderTest {
     @Test
     void getBooleanEvaluation_withMatchingFlag_returnsEvaluatedValue() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature-enabled", "Boolean", "false", "true")
+                new Flag("feature-enabled", "Boolean", "false", "true", "rule-0", "TARGETING_MATCH")
         ));
         provider.initialize(null);
 
@@ -38,13 +38,14 @@ class FlipswitchProviderTest {
                 "feature-enabled", false, null);
 
         assertTrue(result.getValue());
-        assertEquals(Reason.TARGETING_MATCH.toString(), result.getReason());
+        assertEquals("TARGETING_MATCH", result.getReason());
+        assertEquals("rule-0", result.getVariant());
     }
 
     @Test
     void getBooleanEvaluation_withDefaultValue_returnsDefault() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature-disabled", "Boolean", "false", null)
+                new Flag("feature-disabled", "Boolean", "false", null, "default", "DEFAULT")
         ));
         provider.initialize(null);
 
@@ -52,7 +53,8 @@ class FlipswitchProviderTest {
                 "feature-disabled", true, null);
 
         assertFalse(result.getValue()); // Uses flag's default, not the passed default
-        assertEquals(Reason.DEFAULT.toString(), result.getReason());
+        assertEquals("DEFAULT", result.getReason());
+        assertEquals("default", result.getVariant());
     }
 
     @Test
@@ -70,7 +72,7 @@ class FlipswitchProviderTest {
     @Test
     void getStringEvaluation_withMatchingFlag_returnsEvaluatedValue() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("variant", "String", "control", "treatment-a")
+                new Flag("variant", "String", "control", "treatment-a", "rule-0", "TARGETING_MATCH")
         ));
         provider.initialize(null);
 
@@ -78,13 +80,13 @@ class FlipswitchProviderTest {
                 "variant", "control", null);
 
         assertEquals("treatment-a", result.getValue());
-        assertEquals(Reason.TARGETING_MATCH.toString(), result.getReason());
+        assertEquals("TARGETING_MATCH", result.getReason());
     }
 
     @Test
     void getStringEvaluation_withDefaultValue_returnsDefault() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("variant", "String", "control", null)
+                new Flag("variant", "String", "control", null, "default", "DEFAULT")
         ));
         provider.initialize(null);
 
@@ -92,13 +94,13 @@ class FlipswitchProviderTest {
                 "variant", "fallback", null);
 
         assertEquals("control", result.getValue());
-        assertEquals(Reason.DEFAULT.toString(), result.getReason());
+        assertEquals("DEFAULT", result.getReason());
     }
 
     @Test
     void getIntegerEvaluation_withValidNumber_returnsInteger() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("max-items", "Integer", "10", "50")
+                new Flag("max-items", "Integer", "10", "50", "rule-0", "TARGETING_MATCH")
         ));
         provider.initialize(null);
 
@@ -106,13 +108,13 @@ class FlipswitchProviderTest {
                 "max-items", 10, null);
 
         assertEquals(50, result.getValue());
-        assertEquals(Reason.TARGETING_MATCH.toString(), result.getReason());
+        assertEquals("TARGETING_MATCH", result.getReason());
     }
 
     @Test
     void getIntegerEvaluation_withInvalidNumber_returnsErrorAndDefault() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("max-items", "Integer", "not-a-number", null)
+                new Flag("max-items", "Integer", "not-a-number", null, "default", "DEFAULT")
         ));
         provider.initialize(null);
 
@@ -127,7 +129,7 @@ class FlipswitchProviderTest {
     @Test
     void getDoubleEvaluation_withValidNumber_returnsDouble() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("rate-limit", "Decimal", "1.0", "2.5")
+                new Flag("rate-limit", "Decimal", "1.0", "2.5", "rule-0", "TARGETING_MATCH")
         ));
         provider.initialize(null);
 
@@ -135,13 +137,13 @@ class FlipswitchProviderTest {
                 "rate-limit", 1.0, null);
 
         assertEquals(2.5, result.getValue());
-        assertEquals(Reason.TARGETING_MATCH.toString(), result.getReason());
+        assertEquals("TARGETING_MATCH", result.getReason());
     }
 
     @Test
     void getDoubleEvaluation_withInvalidNumber_returnsErrorAndDefault() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("rate-limit", "Decimal", "invalid", null)
+                new Flag("rate-limit", "Decimal", "invalid", null, "default", "DEFAULT")
         ));
         provider.initialize(null);
 
@@ -156,7 +158,7 @@ class FlipswitchProviderTest {
     @Test
     void getObjectEvaluation_returnsStringAsValue() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("config", "String", "{}", "{\"key\":\"value\"}")
+                new Flag("config", "String", "{}", "{\"key\":\"value\"}", "rule-0", "TARGETING_MATCH")
         ));
         provider.initialize(null);
 
@@ -164,7 +166,7 @@ class FlipswitchProviderTest {
                 "config", new Value("{}"), null);
 
         assertEquals("{\"key\":\"value\"}", result.getValue().asString());
-        assertEquals(Reason.TARGETING_MATCH.toString(), result.getReason());
+        assertEquals("TARGETING_MATCH", result.getReason());
     }
 
     @Test
@@ -197,7 +199,7 @@ class FlipswitchProviderTest {
     void refreshFlags_updatesCacheWithNewFlags() throws Exception {
         // Initial flags
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature", "Boolean", "false", "true")
+                new Flag("feature", "Boolean", "false", "true", "rule-0", "TARGETING_MATCH")
         ));
         provider.initialize(null);
 
@@ -206,7 +208,7 @@ class FlipswitchProviderTest {
 
         // Updated flags
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature", "Boolean", "false", "false")
+                new Flag("feature", "Boolean", "false", "false", "rule-1", "TARGETING_MATCH")
         ));
         provider.refreshFlags(null);
 
@@ -217,7 +219,7 @@ class FlipswitchProviderTest {
     @Test
     void shutdown_clearsFlagCache() throws Exception {
         when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature", "Boolean", "false", "true")
+                new Flag("feature", "Boolean", "false", "true", "rule-0", "TARGETING_MATCH")
         ));
         provider.initialize(null);
 
@@ -231,5 +233,19 @@ class FlipswitchProviderTest {
         ProviderEvaluation<Boolean> result2 = provider.getBooleanEvaluation("feature", false, null);
         assertFalse(result2.getValue());
         assertEquals(Reason.DEFAULT.toString(), result2.getReason());
+    }
+
+    @Test
+    void getBooleanEvaluation_withRollout_returnsSplitReason() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(List.of(
+                new Flag("feature", "Boolean", "false", "true", "rollout", "SPLIT")
+        ));
+        provider.initialize(null);
+
+        ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation("feature", false, null);
+
+        assertTrue(result.getValue());
+        assertEquals("SPLIT", result.getReason());
+        assertEquals("rollout", result.getVariant());
     }
 }

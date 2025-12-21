@@ -12,17 +12,23 @@ public class Flag {
     private final String flagType;
     private final String defaultStringValue;
     private final String stringValue;
+    private final String variant;
+    private final String reason;
 
     @JsonCreator
     public Flag(
             @JsonProperty("key") String key,
             @JsonProperty("flagType") String flagType,
             @JsonProperty("defaultStringValue") String defaultStringValue,
-            @JsonProperty("stringValue") String stringValue) {
+            @JsonProperty("stringValue") String stringValue,
+            @JsonProperty("variant") String variant,
+            @JsonProperty("reason") String reason) {
         this.key = key;
         this.flagType = flagType;
         this.defaultStringValue = defaultStringValue;
         this.stringValue = stringValue;
+        this.variant = variant;
+        this.reason = reason;
     }
 
     public String getKey() {
@@ -39,6 +45,14 @@ public class Flag {
 
     public String getStringValue() {
         return stringValue;
+    }
+
+    public String getVariant() {
+        return variant;
+    }
+
+    public String getReason() {
+        return reason;
     }
 
     /**
