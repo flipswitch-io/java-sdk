@@ -1,11 +1,15 @@
 package dev.flipswitch.openfeature;
 
 import dev.openfeature.sdk.*;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -20,6 +24,11 @@ class FlipswitchProviderTest {
     void setUp() {
         mockClient = mock(FlipswitchClient.class);
         provider = new FlipswitchProvider(mockClient);
+    }
+
+    @AfterEach
+    void tearDown() {
+        OpenFeatureAPI.getInstance().shutdown();
     }
 
     @Test
@@ -247,5 +256,85 @@ class FlipswitchProviderTest {
         assertTrue(result.getValue());
         assertEquals("SPLIT", result.getReason());
         assertEquals("rollout", result.getVariant());
+    }
+
+    // === Event Tests ===
+
+    @Test
+    void initialize_emitsProviderReadyOnSuccess() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(List.of());
+
+        CountDownLatch readyLatch = new CountDownLatch(1);
+        AtomicReference<ProviderEventDetails> eventDetails = new AtomicReference<>();
+
+        OpenFeatureAPI api = OpenFeatureAPI.getInstance();
+        api.onProviderReady(details -> {
+            eventDetails.set(details);
+            readyLatch.countDown();
+        });
+        api.setProviderAndWait(provider);
+
+        assertTrue(readyLatch.await(5, TimeUnit.SECONDS), "PROVIDER_READY event should be emitted");
+    }
+
+    @Test
+    void initialize_emitsProviderErrorOnFailure() throws Exception {
+        when(mockClient.fetchFlags(any())).thenThrow(new FlipswitchException("Connection failed"));
+
+        CountDownLatch errorLatch = new CountDownLatch(1);
+        AtomicReference<ProviderEventDetails> eventDetails = new AtomicReference<>();
+
+        OpenFeatureAPI api = OpenFeatureAPI.getInstance();
+        api.onProviderError(details -> {
+            eventDetails.set(details);
+            errorLatch.countDown();
+        });
+
+        try {
+            api.setProviderAndWait(provider);
+        } catch (Exception e) {
+            // Expected - initialization failed
+        }
+
+        assertTrue(errorLatch.await(5, TimeUnit.SECONDS), "PROVIDER_ERROR event should be emitted");
+        assertNotNull(eventDetails.get());
+        assertTrue(eventDetails.get().getMessage().contains("Initialization failed"));
+    }
+
+    @Test
+    void refreshFlags_emitsConfigurationChanged() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(List.of());
+
+        CountDownLatch changedLatch = new CountDownLatch(1);
+
+        OpenFeatureAPI api = OpenFeatureAPI.getInstance();
+        api.onProviderConfigurationChanged(details -> changedLatch.countDown());
+        api.setProviderAndWait(provider);
+
+        // Now refresh - this should emit CONFIGURATION_CHANGED
+        provider.refreshFlags(null);
+
+        assertTrue(changedLatch.await(5, TimeUnit.SECONDS), "PROVIDER_CONFIGURATION_CHANGED event should be emitted");
+    }
+
+    @Test
+    void markStale_emitsProviderStale() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(List.of());
+
+        CountDownLatch staleLatch = new CountDownLatch(1);
+        AtomicReference<ProviderEventDetails> eventDetails = new AtomicReference<>();
+
+        OpenFeatureAPI api = OpenFeatureAPI.getInstance();
+        api.onProviderStale(details -> {
+            eventDetails.set(details);
+            staleLatch.countDown();
+        });
+        api.setProviderAndWait(provider);
+
+        provider.markStale();
+
+        assertTrue(staleLatch.await(5, TimeUnit.SECONDS), "PROVIDER_STALE event should be emitted");
+        assertNotNull(eventDetails.get());
+        assertEquals("Cache marked as stale", eventDetails.get().getMessage());
     }
 }
