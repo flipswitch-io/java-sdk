@@ -15,7 +15,7 @@ class FlipswitchClientTest {
 
     @Test
     void fetchFlags_withValidResponse_returnsFlags(WireMockRuntimeInfo wmRuntimeInfo) throws Exception {
-        stubFor(post(urlEqualTo("/api/flags"))
+        stubFor(post(urlEqualTo("/api/v1/flags"))
                 .withHeader("X-Environment-Key", equalTo("test-api-key"))
                 .withHeader("Content-Type", containing("application/json"))
                 .willReturn(aResponse()
@@ -53,7 +53,7 @@ class FlipswitchClientTest {
 
     @Test
     void fetchFlags_sendsIdentityInRequestBody(WireMockRuntimeInfo wmRuntimeInfo) throws Exception {
-        stubFor(post(urlEqualTo("/api/flags"))
+        stubFor(post(urlEqualTo("/api/v1/flags"))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
@@ -67,7 +67,7 @@ class FlipswitchClientTest {
         FlipswitchClient client = new FlipswitchClient(config);
         client.fetchFlags(new Identity("user-123", Map.of("email", "test@example.com", "plan", "premium")));
 
-        verify(postRequestedFor(urlEqualTo("/api/flags"))
+        verify(postRequestedFor(urlEqualTo("/api/v1/flags"))
                 .withRequestBody(matchingJsonPath("$.id", equalTo("user-123")))
                 .withRequestBody(matchingJsonPath("$.traits.email", equalTo("test@example.com")))
                 .withRequestBody(matchingJsonPath("$.traits.plan", equalTo("premium"))));
@@ -75,7 +75,7 @@ class FlipswitchClientTest {
 
     @Test
     void fetchFlags_withEmptyResponse_returnsEmptyList(WireMockRuntimeInfo wmRuntimeInfo) throws Exception {
-        stubFor(post(urlEqualTo("/api/flags"))
+        stubFor(post(urlEqualTo("/api/v1/flags"))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
@@ -94,7 +94,7 @@ class FlipswitchClientTest {
 
     @Test
     void fetchFlags_withServerError_throwsException(WireMockRuntimeInfo wmRuntimeInfo) {
-        stubFor(post(urlEqualTo("/api/flags"))
+        stubFor(post(urlEqualTo("/api/v1/flags"))
                 .willReturn(aResponse()
                         .withStatus(500)
                         .withBody("Internal Server Error")));
@@ -114,7 +114,7 @@ class FlipswitchClientTest {
 
     @Test
     void fetchFlags_withBadRequest_throwsException(WireMockRuntimeInfo wmRuntimeInfo) {
-        stubFor(post(urlEqualTo("/api/flags"))
+        stubFor(post(urlEqualTo("/api/v1/flags"))
                 .willReturn(aResponse()
                         .withStatus(400)
                         .withBody("Missing header")));

@@ -52,10 +52,12 @@ class FlipswitchSseClientTest {
     }
 
     @Test
-    void flagChangeEvent_hasTimestamp() {
+    void flagChangeEvent_hasAllFields() {
         Instant now = Instant.now();
-        FlagChangeEvent event = new FlagChangeEvent(now);
+        FlagChangeEvent event = new FlagChangeEvent(1, "test-flag", now);
 
+        assertEquals(1, event.getEnvironmentId());
+        assertEquals("test-flag", event.getFlagKey());
         assertEquals(now, event.getTimestamp());
         assertTrue(event.toString().contains(now.toString()));
     }
