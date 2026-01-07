@@ -105,11 +105,11 @@ public class FlipswitchSseClient implements AutoCloseable {
     }
 
     private void connectAndStream() throws IOException, InterruptedException {
-        String sseUrl = config.getBaseUrl() + "/api/v1/flags/stream";
+        String sseUrl = config.getBaseUrl() + "/api/v1/flags/events";
 
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(sseUrl))
-                .header("X-Environment-Key", config.getApiKey())
+                .header("X-API-Key", config.getApiKey())
                 .header("Accept", "text/event-stream")
                 .GET();
 

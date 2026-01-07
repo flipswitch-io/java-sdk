@@ -3,12 +3,7 @@ package dev.flipswitch.openfeature;
 import dev.openfeature.sdk.*;
 
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 
 /**
  * OpenFeature provider for Flipswitch feature flag service.
@@ -28,8 +23,8 @@ public class FlipswitchProvider extends EventProvider {
 
     private final FlipswitchClient client;
     private final FlipswitchSseClient sseClient;
-    private final Map<String, Flag> flagCache = new ConcurrentHashMap<>();
-    private volatile EvaluationContext lastContext;
+    private final Map<String, EvaluationResult> flagCache = new ConcurrentHashMap<>();
+    private volatile dev.openfeature.sdk.EvaluationContext lastContext;
 
     /**
      * Creates a new FlipswitchProvider.
@@ -63,7 +58,7 @@ public class FlipswitchProvider extends EventProvider {
     }
 
     @Override
-    public void initialize(EvaluationContext evaluationContext) throws Exception {
+    public void initialize(dev.openfeature.sdk.EvaluationContext evaluationContext) throws Exception {
         try {
             refreshFlagsInternal(evaluationContext);
             if (sseClient != null) {
@@ -112,10 +107,10 @@ public class FlipswitchProvider extends EventProvider {
      * Refreshes a single flag in the cache.
      */
     private void refreshSingleFlag(String flagKey) throws Exception {
-        Identity identity = contextToIdentity(lastContext);
-        Flag flag = client.fetchFlag(flagKey, identity);
-        if (flag != null) {
-            flagCache.put(flag.getKey(), flag);
+        EvaluationContext context = contextToEvaluationContext(lastContext);
+        EvaluationResult result = client.fetchFlag(flagKey, context);
+        if (result != null) {
+            flagCache.put(result.getKey(), result);
         } else {
             // Flag was deleted or doesn't exist anymore
             flagCache.remove(flagKey);
@@ -138,7 +133,7 @@ public class FlipswitchProvider extends EventProvider {
      * @param context The evaluation context to use for fetching flags
      * @throws Exception if the refresh fails
      */
-    public void refreshFlags(EvaluationContext context) throws Exception {
+    public void refreshFlags(dev.openfeature.sdk.EvaluationContext context) throws Exception {
         refreshFlagsInternal(context);
         emitProviderConfigurationChanged(ProviderEventDetails.builder().build());
     }
@@ -157,132 +152,207 @@ public class FlipswitchProvider extends EventProvider {
      * Internal method to refresh flags without emitting events.
      * Used by initialize() and onContextChanged() which emit their own events.
      */
-    private void refreshFlagsInternal(EvaluationContext context) throws Exception {
+    private void refreshFlagsInternal(dev.openfeature.sdk.EvaluationContext context) throws Exception {
         this.lastContext = context;
-        var flags = client.fetchFlags(contextToIdentity(context));
-        flagCache.clear();
-        for (Flag flag : flags) {
-            flagCache.put(flag.getKey(), flag);
+        FlipswitchClient.BulkFetchResult result = client.fetchFlags(contextToEvaluationContext(context));
+
+        // Only clear and update cache if we got new data (not a 304 response)
+        if (!result.isNotModified()) {
+            flagCache.clear();
+            for (EvaluationResult flag : result.getResults()) {
+                flagCache.put(flag.getKey(), flag);
+            }
         }
     }
 
     @Override
     public ProviderEvaluation<Boolean> getBooleanEvaluation(
-            String key, Boolean defaultValue, EvaluationContext ctx) {
-        Flag flag = flagCache.get(key);
-        if (flag == null) {
+            String key, Boolean defaultValue, dev.openfeature.sdk.EvaluationContext ctx) {
+        EvaluationResult result = flagCache.get(key);
+        if (result == null || result.isError()) {
             return ProviderEvaluation.<Boolean>builder()
                     .value(defaultValue)
                     .reason(Reason.DEFAULT.toString())
                     .build();
         }
 
-        String value = flag.getEffectiveValue();
-        boolean result = Boolean.parseBoolean(value);
+        Boolean value = result.getBooleanValue();
+        if (value == null) {
+            return ProviderEvaluation.<Boolean>builder()
+                    .value(defaultValue)
+                    .reason(Reason.ERROR.toString())
+                    .errorCode(ErrorCode.TYPE_MISMATCH)
+                    .errorMessage("Flag value is not a boolean")
+                    .build();
+        }
 
         return ProviderEvaluation.<Boolean>builder()
-                .value(result)
-                .variant(flag.getVariant())
-                .reason(flag.getReason())
+                .value(value)
+                .variant(result.getVariant())
+                .reason(result.getReason())
                 .build();
     }
 
     @Override
     public ProviderEvaluation<String> getStringEvaluation(
-            String key, String defaultValue, EvaluationContext ctx) {
-        Flag flag = flagCache.get(key);
-        if (flag == null) {
+            String key, String defaultValue, dev.openfeature.sdk.EvaluationContext ctx) {
+        EvaluationResult result = flagCache.get(key);
+        if (result == null || result.isError()) {
             return ProviderEvaluation.<String>builder()
                     .value(defaultValue)
                     .reason(Reason.DEFAULT.toString())
                     .build();
         }
 
+        String value = result.getStringValue();
+        if (value == null) {
+            // Try to convert to string
+            Object rawValue = result.getValue();
+            if (rawValue != null) {
+                value = rawValue.toString();
+            } else {
+                return ProviderEvaluation.<String>builder()
+                        .value(defaultValue)
+                        .reason(Reason.ERROR.toString())
+                        .errorCode(ErrorCode.TYPE_MISMATCH)
+                        .errorMessage("Flag value is null")
+                        .build();
+            }
+        }
+
         return ProviderEvaluation.<String>builder()
-                .value(flag.getEffectiveValue())
-                .variant(flag.getVariant())
-                .reason(flag.getReason())
+                .value(value)
+                .variant(result.getVariant())
+                .reason(result.getReason())
                 .build();
     }
 
     @Override
     public ProviderEvaluation<Integer> getIntegerEvaluation(
-            String key, Integer defaultValue, EvaluationContext ctx) {
-        Flag flag = flagCache.get(key);
-        if (flag == null) {
+            String key, Integer defaultValue, dev.openfeature.sdk.EvaluationContext ctx) {
+        EvaluationResult result = flagCache.get(key);
+        if (result == null || result.isError()) {
             return ProviderEvaluation.<Integer>builder()
                     .value(defaultValue)
                     .reason(Reason.DEFAULT.toString())
                     .build();
         }
 
-        try {
-            int result = Integer.parseInt(flag.getEffectiveValue());
-            return ProviderEvaluation.<Integer>builder()
-                    .value(result)
-                    .variant(flag.getVariant())
-                    .reason(flag.getReason())
-                    .build();
-        } catch (NumberFormatException e) {
+        Integer value = result.getIntegerValue();
+        if (value == null) {
             return ProviderEvaluation.<Integer>builder()
                     .value(defaultValue)
                     .reason(Reason.ERROR.toString())
-                    .errorCode(ErrorCode.PARSE_ERROR)
-                    .errorMessage("Failed to parse integer: " + flag.getEffectiveValue())
+                    .errorCode(ErrorCode.TYPE_MISMATCH)
+                    .errorMessage("Flag value is not an integer")
                     .build();
         }
+
+        return ProviderEvaluation.<Integer>builder()
+                .value(value)
+                .variant(result.getVariant())
+                .reason(result.getReason())
+                .build();
     }
 
     @Override
     public ProviderEvaluation<Double> getDoubleEvaluation(
-            String key, Double defaultValue, EvaluationContext ctx) {
-        Flag flag = flagCache.get(key);
-        if (flag == null) {
+            String key, Double defaultValue, dev.openfeature.sdk.EvaluationContext ctx) {
+        EvaluationResult result = flagCache.get(key);
+        if (result == null || result.isError()) {
             return ProviderEvaluation.<Double>builder()
                     .value(defaultValue)
                     .reason(Reason.DEFAULT.toString())
                     .build();
         }
 
-        try {
-            double result = Double.parseDouble(flag.getEffectiveValue());
-            return ProviderEvaluation.<Double>builder()
-                    .value(result)
-                    .variant(flag.getVariant())
-                    .reason(flag.getReason())
-                    .build();
-        } catch (NumberFormatException e) {
+        Double value = result.getDoubleValue();
+        if (value == null) {
             return ProviderEvaluation.<Double>builder()
                     .value(defaultValue)
                     .reason(Reason.ERROR.toString())
-                    .errorCode(ErrorCode.PARSE_ERROR)
-                    .errorMessage("Failed to parse double: " + flag.getEffectiveValue())
+                    .errorCode(ErrorCode.TYPE_MISMATCH)
+                    .errorMessage("Flag value is not a number")
                     .build();
         }
+
+        return ProviderEvaluation.<Double>builder()
+                .value(value)
+                .variant(result.getVariant())
+                .reason(result.getReason())
+                .build();
     }
 
     @Override
     public ProviderEvaluation<Value> getObjectEvaluation(
-            String key, Value defaultValue, EvaluationContext ctx) {
-        Flag flag = flagCache.get(key);
-        if (flag == null) {
+            String key, Value defaultValue, dev.openfeature.sdk.EvaluationContext ctx) {
+        EvaluationResult result = flagCache.get(key);
+        if (result == null || result.isError()) {
             return ProviderEvaluation.<Value>builder()
                     .value(defaultValue)
                     .reason(Reason.DEFAULT.toString())
                     .build();
         }
 
-        // For object evaluation, return the string value wrapped in a Value
+        // Convert the value to an OpenFeature Value
+        Value value = convertToValue(result.getValue());
+        if (value == null) {
+            return ProviderEvaluation.<Value>builder()
+                    .value(defaultValue)
+                    .reason(Reason.ERROR.toString())
+                    .errorCode(ErrorCode.TYPE_MISMATCH)
+                    .errorMessage("Unable to convert flag value to object")
+                    .build();
+        }
+
         return ProviderEvaluation.<Value>builder()
-                .value(new Value(flag.getEffectiveValue()))
-                .variant(flag.getVariant())
-                .reason(flag.getReason())
+                .value(value)
+                .variant(result.getVariant())
+                .reason(result.getReason())
                 .build();
     }
 
-    private Identity contextToIdentity(EvaluationContext ctx) {
+    /**
+     * Converts an OFREP value to an OpenFeature Value.
+     */
+    @SuppressWarnings("unchecked")
+    private Value convertToValue(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof Boolean) {
+            return new Value((Boolean) obj);
+        }
+        if (obj instanceof String) {
+            return new Value((String) obj);
+        }
+        if (obj instanceof Integer) {
+            return new Value((Integer) obj);
+        }
+        if (obj instanceof Number) {
+            return new Value(((Number) obj).doubleValue());
+        }
+        if (obj instanceof Map) {
+            Map<String, Object> map = (Map<String, Object>) obj;
+            MutableStructure structure = new MutableStructure();
+            for (Map.Entry<String, Object> entry : map.entrySet()) {
+                Value entryValue = convertToValue(entry.getValue());
+                if (entryValue != null) {
+                    structure.add(entry.getKey(), entryValue);
+                }
+            }
+            return new Value(structure);
+        }
+        // Fallback: convert to string
+        return new Value(obj.toString());
+    }
+
+    /**
+     * Converts an OpenFeature EvaluationContext to an OFREP EvaluationContext.
+     */
+    private EvaluationContext contextToEvaluationContext(dev.openfeature.sdk.EvaluationContext ctx) {
         if (ctx == null) {
-            return new Identity("anonymous", Map.of());
+            return new EvaluationContext("anonymous", Map.of());
         }
 
         String targetingKey = ctx.getTargetingKey();
@@ -290,14 +360,43 @@ public class FlipswitchProvider extends EventProvider {
             targetingKey = "anonymous";
         }
 
-        Map<String, String> traits = new java.util.HashMap<>();
+        Map<String, Object> properties = new java.util.HashMap<>();
         for (String key : ctx.keySet()) {
             Value value = ctx.getValue(key);
-            if (value != null && value.asString() != null) {
-                traits.put(key, value.asString());
+            if (value != null) {
+                properties.put(key, convertValueToObject(value));
             }
         }
 
-        return new Identity(targetingKey, traits);
+        return new EvaluationContext(targetingKey, properties);
+    }
+
+    /**
+     * Converts an OpenFeature Value to a plain Java object.
+     */
+    private Object convertValueToObject(Value value) {
+        if (value.isBoolean()) {
+            return value.asBoolean();
+        }
+        if (value.isString()) {
+            return value.asString();
+        }
+        if (value.isNumber()) {
+            double d = value.asDouble();
+            if (d == Math.floor(d) && d >= Integer.MIN_VALUE && d <= Integer.MAX_VALUE) {
+                return (int) d;
+            }
+            return d;
+        }
+        if (value.isStructure()) {
+            Map<String, Object> map = new java.util.HashMap<>();
+            Structure structure = value.asStructure();
+            for (String key : structure.keySet()) {
+                map.put(key, convertValueToObject(structure.getValue(key)));
+            }
+            return map;
+        }
+        // Fallback
+        return value.asString();
     }
 }

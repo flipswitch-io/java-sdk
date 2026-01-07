@@ -31,6 +31,10 @@ class FlipswitchProviderTest {
         OpenFeatureAPI.getInstance().shutdown();
     }
 
+    private FlipswitchClient.BulkFetchResult createBulkResult(List<EvaluationResult> results) {
+        return new FlipswitchClient.BulkFetchResult(results, false, null);
+    }
+
     @Test
     void getMetadata_returnsFlipswitch() {
         assertEquals("flipswitch", provider.getMetadata().getName());
@@ -38,9 +42,9 @@ class FlipswitchProviderTest {
 
     @Test
     void getBooleanEvaluation_withMatchingFlag_returnsEvaluatedValue() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature-enabled", "Boolean", "false", "true", "rule-0", "TARGETING_MATCH")
-        ));
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature-enabled", true, "TARGETING_MATCH", "enabled", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation(
@@ -48,27 +52,27 @@ class FlipswitchProviderTest {
 
         assertTrue(result.getValue());
         assertEquals("TARGETING_MATCH", result.getReason());
-        assertEquals("rule-0", result.getVariant());
+        assertEquals("enabled", result.getVariant());
     }
 
     @Test
-    void getBooleanEvaluation_withDefaultValue_returnsDefault() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature-disabled", "Boolean", "false", null, "default", "DEFAULT")
-        ));
+    void getBooleanEvaluation_withFalseValue_returnsFalse() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature-disabled", false, "DEFAULT", "default", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation(
                 "feature-disabled", true, null);
 
-        assertFalse(result.getValue()); // Uses flag's default, not the passed default
+        assertFalse(result.getValue());
         assertEquals("DEFAULT", result.getReason());
         assertEquals("default", result.getVariant());
     }
 
     @Test
     void getBooleanEvaluation_withUnknownFlag_returnsPassedDefault() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of());
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of()));
         provider.initialize(null);
 
         ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation(
@@ -79,10 +83,25 @@ class FlipswitchProviderTest {
     }
 
     @Test
+    void getBooleanEvaluation_withNonBooleanValue_returnsDefaultWithTypeError() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature", "not-a-boolean", "TARGETING_MATCH", "variant", null, null, null)
+        )));
+        provider.initialize(null);
+
+        ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation(
+                "feature", true, null);
+
+        assertTrue(result.getValue()); // Returns default
+        assertEquals(Reason.ERROR.toString(), result.getReason());
+        assertEquals(ErrorCode.TYPE_MISMATCH, result.getErrorCode());
+    }
+
+    @Test
     void getStringEvaluation_withMatchingFlag_returnsEvaluatedValue() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("variant", "String", "control", "treatment-a", "rule-0", "TARGETING_MATCH")
-        ));
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("variant", "treatment-a", "TARGETING_MATCH", "rule-0", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<String> result = provider.getStringEvaluation(
@@ -93,24 +112,24 @@ class FlipswitchProviderTest {
     }
 
     @Test
-    void getStringEvaluation_withDefaultValue_returnsDefault() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("variant", "String", "control", null, "default", "DEFAULT")
-        ));
+    void getStringEvaluation_withNonStringValue_convertsToString() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("variant", 42, "DEFAULT", "default", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<String> result = provider.getStringEvaluation(
                 "variant", "fallback", null);
 
-        assertEquals("control", result.getValue());
+        assertEquals("42", result.getValue()); // Converted to string
         assertEquals("DEFAULT", result.getReason());
     }
 
     @Test
     void getIntegerEvaluation_withValidNumber_returnsInteger() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("max-items", "Integer", "10", "50", "rule-0", "TARGETING_MATCH")
-        ));
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("max-items", 50, "TARGETING_MATCH", "rule-0", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<Integer> result = provider.getIntegerEvaluation(
@@ -121,10 +140,10 @@ class FlipswitchProviderTest {
     }
 
     @Test
-    void getIntegerEvaluation_withInvalidNumber_returnsErrorAndDefault() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("max-items", "Integer", "not-a-number", null, "default", "DEFAULT")
-        ));
+    void getIntegerEvaluation_withNonNumber_returnsDefaultWithTypeError() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("max-items", "not-a-number", "DEFAULT", "default", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<Integer> result = provider.getIntegerEvaluation(
@@ -132,14 +151,14 @@ class FlipswitchProviderTest {
 
         assertEquals(99, result.getValue());
         assertEquals(Reason.ERROR.toString(), result.getReason());
-        assertEquals(ErrorCode.PARSE_ERROR, result.getErrorCode());
+        assertEquals(ErrorCode.TYPE_MISMATCH, result.getErrorCode());
     }
 
     @Test
     void getDoubleEvaluation_withValidNumber_returnsDouble() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("rate-limit", "Decimal", "1.0", "2.5", "rule-0", "TARGETING_MATCH")
-        ));
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("rate-limit", 2.5, "TARGETING_MATCH", "rule-0", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<Double> result = provider.getDoubleEvaluation(
@@ -150,10 +169,10 @@ class FlipswitchProviderTest {
     }
 
     @Test
-    void getDoubleEvaluation_withInvalidNumber_returnsErrorAndDefault() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("rate-limit", "Decimal", "invalid", null, "default", "DEFAULT")
-        ));
+    void getDoubleEvaluation_withNonNumber_returnsDefaultWithTypeError() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("rate-limit", "invalid", "DEFAULT", "default", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<Double> result = provider.getDoubleEvaluation(
@@ -161,64 +180,80 @@ class FlipswitchProviderTest {
 
         assertEquals(3.14, result.getValue());
         assertEquals(Reason.ERROR.toString(), result.getReason());
-        assertEquals(ErrorCode.PARSE_ERROR, result.getErrorCode());
+        assertEquals(ErrorCode.TYPE_MISMATCH, result.getErrorCode());
     }
 
     @Test
-    void getObjectEvaluation_returnsStringAsValue() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("config", "String", "{}", "{\"key\":\"value\"}", "rule-0", "TARGETING_MATCH")
-        ));
+    void getObjectEvaluation_withMap_returnsStructure() throws Exception {
+        Map<String, Object> configValue = Map.of("key", "value", "enabled", true);
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("config", configValue, "TARGETING_MATCH", "rule-0", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<Value> result = provider.getObjectEvaluation(
                 "config", new Value("{}"), null);
 
-        assertEquals("{\"key\":\"value\"}", result.getValue().asString());
+        assertTrue(result.getValue().isStructure());
+        assertEquals("value", result.getValue().asStructure().getValue("key").asString());
         assertEquals("TARGETING_MATCH", result.getReason());
     }
 
     @Test
-    void initialize_fetchesFlagsWithContext() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of());
+    void getObjectEvaluation_withBoolean_returnsBooleanValue() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature", true, "TARGETING_MATCH", "enabled", null, null, null)
+        )));
+        provider.initialize(null);
 
-        EvaluationContext context = new ImmutableContext("user-123", Map.of(
+        ProviderEvaluation<Value> result = provider.getObjectEvaluation(
+                "feature", new Value(false), null);
+
+        assertTrue(result.getValue().isBoolean());
+        assertTrue(result.getValue().asBoolean());
+    }
+
+    @Test
+    void initialize_fetchesFlagsWithContext() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of()));
+
+        dev.openfeature.sdk.EvaluationContext context = new ImmutableContext("user-123", Map.of(
                 "email", new Value("test@example.com")
         ));
         provider.initialize(context);
 
-        verify(mockClient).fetchFlags(argThat(identity ->
-                "user-123".equals(identity.getId()) &&
-                        "test@example.com".equals(identity.getTraits().get("email"))
+        verify(mockClient).fetchFlags(argThat(evalContext ->
+                "user-123".equals(evalContext.getTargetingKey()) &&
+                        "test@example.com".equals(evalContext.getProperties().get("email"))
         ));
     }
 
     @Test
     void initialize_withNullContext_usesAnonymousIdentity() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of());
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of()));
 
         provider.initialize(null);
 
-        verify(mockClient).fetchFlags(argThat(identity ->
-                "anonymous".equals(identity.getId())
+        verify(mockClient).fetchFlags(argThat(evalContext ->
+                "anonymous".equals(evalContext.getTargetingKey())
         ));
     }
 
     @Test
     void refreshFlags_updatesCacheWithNewFlags() throws Exception {
         // Initial flags
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature", "Boolean", "false", "true", "rule-0", "TARGETING_MATCH")
-        ));
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature", true, "TARGETING_MATCH", "rule-0", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<Boolean> result1 = provider.getBooleanEvaluation("feature", false, null);
         assertTrue(result1.getValue());
 
         // Updated flags
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature", "Boolean", "false", "false", "rule-1", "TARGETING_MATCH")
-        ));
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature", false, "TARGETING_MATCH", "rule-1", null, null, null)
+        )));
         provider.refreshFlags(null);
 
         ProviderEvaluation<Boolean> result2 = provider.getBooleanEvaluation("feature", false, null);
@@ -226,10 +261,28 @@ class FlipswitchProviderTest {
     }
 
     @Test
+    void refreshFlags_withNotModified_keepsCachedFlags() throws Exception {
+        // Initial fetch - returns flags
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature", true, "TARGETING_MATCH", "rule-0", null, null, null)
+        )));
+        provider.initialize(null);
+
+        // Second fetch - returns 304 Not Modified
+        when(mockClient.fetchFlags(any())).thenReturn(
+                new FlipswitchClient.BulkFetchResult(List.of(), true, "\"etag\""));
+        provider.refreshFlags(null);
+
+        // Should still have the original value
+        ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation("feature", false, null);
+        assertTrue(result.getValue());
+    }
+
+    @Test
     void shutdown_clearsFlagCache() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature", "Boolean", "false", "true", "rule-0", "TARGETING_MATCH")
-        ));
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature", true, "TARGETING_MATCH", "rule-0", null, null, null)
+        )));
         provider.initialize(null);
 
         // Flag exists before shutdown
@@ -246,9 +299,9 @@ class FlipswitchProviderTest {
 
     @Test
     void getBooleanEvaluation_withRollout_returnsSplitReason() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of(
-                new Flag("feature", "Boolean", "false", "true", "rollout", "SPLIT")
-        ));
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature", true, "SPLIT", "rollout", null, null, null)
+        )));
         provider.initialize(null);
 
         ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation("feature", false, null);
@@ -258,11 +311,24 @@ class FlipswitchProviderTest {
         assertEquals("rollout", result.getVariant());
     }
 
+    @Test
+    void getBooleanEvaluation_withErrorResult_returnsDefault() throws Exception {
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of(
+                new EvaluationResult("feature", null, null, null, null, "FLAG_NOT_FOUND", "Flag not found")
+        )));
+        provider.initialize(null);
+
+        ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation("feature", true, null);
+
+        assertTrue(result.getValue()); // Returns default
+        assertEquals(Reason.DEFAULT.toString(), result.getReason());
+    }
+
     // === Event Tests ===
 
     @Test
     void initialize_emitsProviderReadyOnSuccess() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of());
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of()));
 
         CountDownLatch readyLatch = new CountDownLatch(1);
         AtomicReference<ProviderEventDetails> eventDetails = new AtomicReference<>();
@@ -303,7 +369,7 @@ class FlipswitchProviderTest {
 
     @Test
     void refreshFlags_emitsConfigurationChanged() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of());
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of()));
 
         CountDownLatch changedLatch = new CountDownLatch(1);
 
@@ -319,7 +385,7 @@ class FlipswitchProviderTest {
 
     @Test
     void markStale_emitsProviderStale() throws Exception {
-        when(mockClient.fetchFlags(any())).thenReturn(List.of());
+        when(mockClient.fetchFlags(any())).thenReturn(createBulkResult(List.of()));
 
         CountDownLatch staleLatch = new CountDownLatch(1);
         AtomicReference<ProviderEventDetails> eventDetails = new AtomicReference<>();
