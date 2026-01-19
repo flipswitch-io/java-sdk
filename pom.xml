@@ -11,7 +11,7 @@
 
     <name>Flipswitch SDK</name>
     <description>Flipswitch SDK with real-time SSE support for OpenFeature</description>
-    <url>https://github.com/flipswitch-io/flipswitch</url>
+    <url>https://github.com/flipswitch-dev/flipswitch</url>
 
     <licenses>
         <license>
