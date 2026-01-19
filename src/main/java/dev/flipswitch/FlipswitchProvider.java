@@ -3,13 +3,16 @@ package dev.flipswitch;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import dev.openfeature.contrib.providers.ofrep.OfrepProvider;
+import dev.openfeature.contrib.providers.ofrep.OfrepProviderOptions;
 import dev.openfeature.sdk.*;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -19,8 +22,8 @@ import java.util.function.Consumer;
 /**
  * Flipswitch OpenFeature provider with real-time SSE support.
  * <p>
- * This provider wraps OFREP-compatible flag evaluation with automatic
- * cache invalidation via Server-Sent Events.
+ * This provider wraps the OFREP provider for flag evaluation and adds
+ * real-time updates via Server-Sent Events (SSE).
  * </p>
  *
  * <pre>{@code
@@ -33,7 +36,7 @@ import java.util.function.Consumer;
  * boolean darkMode = client.getBooleanValue("dark-mode", false);
  * }</pre>
  */
-public class FlipswitchProvider implements FeatureProvider {
+public class FlipswitchProvider extends EventProvider {
 
     private static final Logger log = LoggerFactory.getLogger(FlipswitchProvider.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
@@ -44,7 +47,7 @@ public class FlipswitchProvider implements FeatureProvider {
     private final boolean enableRealtime;
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
-    private final FlagCache cache;
+    private final OfrepProvider ofrepProvider;
     private final CopyOnWriteArrayList<Consumer<FlagChangeEvent>> flagChangeListeners;
 
     private SseClient sseClient;
@@ -56,8 +59,14 @@ public class FlipswitchProvider implements FeatureProvider {
         this.enableRealtime = builder.enableRealtime;
         this.httpClient = builder.httpClient != null ? builder.httpClient : new OkHttpClient();
         this.objectMapper = new ObjectMapper();
-        this.cache = new FlagCache(builder.cacheTtl);
         this.flagChangeListeners = new CopyOnWriteArrayList<>();
+
+        // Create underlying OFREP provider for flag evaluation
+        OfrepProviderOptions ofrepOptions = OfrepProviderOptions.builder()
+                .baseUrl(this.baseUrl + "/ofrep/v1")
+                .headers(ImmutableMap.of("X-API-Key", ImmutableList.of(this.apiKey)))
+                .build();
+        this.ofrepProvider = OfrepProvider.constructProvider(ofrepOptions);
     }
 
     /**
@@ -83,7 +92,25 @@ public class FlipswitchProvider implements FeatureProvider {
     public void initialize(EvaluationContext context) throws Exception {
         state = ProviderState.NOT_READY;
 
-        // Validate API key by making a bulk evaluation request
+        // Validate API key first (OFREP provider doesn't throw on auth errors during init)
+        validateApiKey();
+
+        // Initialize the underlying OFREP provider
+        ofrepProvider.initialize(context);
+
+        // Start SSE connection
+        if (enableRealtime) {
+            startSseConnection();
+        }
+
+        state = ProviderState.READY;
+        log.info("Flipswitch provider initialized (realtime={})", enableRealtime);
+    }
+
+    /**
+     * Validate the API key by making a bulk evaluation request.
+     */
+    private void validateApiKey() throws IOException {
         RequestBody body = RequestBody.create("{\"context\":{\"targetingKey\":\"_init_\"}}", JSON);
         Request request = new Request.Builder()
                 .url(baseUrl + "/ofrep/v1/evaluate/flags")
@@ -102,14 +129,6 @@ public class FlipswitchProvider implements FeatureProvider {
                 throw new IOException("Failed to connect to Flipswitch: " + response.code());
             }
         }
-
-        // Start SSE connection
-        if (enableRealtime) {
-            startSseConnection();
-        }
-
-        state = ProviderState.READY;
-        log.info("Flipswitch provider initialized (realtime={})", enableRealtime);
     }
 
     @Override
@@ -118,7 +137,7 @@ public class FlipswitchProvider implements FeatureProvider {
             sseClient.close();
             sseClient = null;
         }
-        cache.clear();
+        ofrepProvider.shutdown();
         state = ProviderState.NOT_READY;
         log.info("Flipswitch provider shut down");
     }
@@ -134,8 +153,10 @@ public class FlipswitchProvider implements FeatureProvider {
                 status -> {
                     if (status == SseClient.ConnectionStatus.ERROR) {
                         state = ProviderState.STALE;
+                        emitProviderStale(ProviderEventDetails.builder().build());
                     } else if (status == SseClient.ConnectionStatus.CONNECTED && state == ProviderState.STALE) {
                         state = ProviderState.READY;
+                        emitProviderReady(ProviderEventDetails.builder().build());
                     }
                 }
         );
@@ -144,9 +165,10 @@ public class FlipswitchProvider implements FeatureProvider {
 
     /**
      * Handle a flag change event from SSE.
+     * Emits PROVIDER_CONFIGURATION_CHANGED to trigger re-evaluation.
      */
     private void handleFlagChange(FlagChangeEvent event) {
-        cache.handleFlagChange(event);
+        // Notify user-registered listeners
         for (Consumer<FlagChangeEvent> listener : flagChangeListeners) {
             try {
                 listener.accept(event);
@@ -154,6 +176,9 @@ public class FlipswitchProvider implements FeatureProvider {
                 log.error("Error in flag change listener: {}", e.getMessage());
             }
         }
+
+        // Emit configuration changed event - OpenFeature clients will re-evaluate flags
+        emitProviderConfigurationChanged(ProviderEventDetails.builder().build());
     }
 
     /**
@@ -188,12 +213,49 @@ public class FlipswitchProvider implements FeatureProvider {
     }
 
     // ===============================
-    // Bulk Flag Evaluation
+    // Flag Resolution Methods - Delegated to OFREP Provider
+    // ===============================
+
+    @Override
+    public ProviderEvaluation<Boolean> getBooleanEvaluation(String key, Boolean defaultValue,
+                                                            EvaluationContext ctx) {
+        return ofrepProvider.getBooleanEvaluation(key, defaultValue, ctx);
+    }
+
+    @Override
+    public ProviderEvaluation<String> getStringEvaluation(String key, String defaultValue,
+                                                          EvaluationContext ctx) {
+        return ofrepProvider.getStringEvaluation(key, defaultValue, ctx);
+    }
+
+    @Override
+    public ProviderEvaluation<Integer> getIntegerEvaluation(String key, Integer defaultValue,
+                                                            EvaluationContext ctx) {
+        return ofrepProvider.getIntegerEvaluation(key, defaultValue, ctx);
+    }
+
+    @Override
+    public ProviderEvaluation<Double> getDoubleEvaluation(String key, Double defaultValue,
+                                                          EvaluationContext ctx) {
+        return ofrepProvider.getDoubleEvaluation(key, defaultValue, ctx);
+    }
+
+    @Override
+    public ProviderEvaluation<Value> getObjectEvaluation(String key, Value defaultValue,
+                                                         EvaluationContext ctx) {
+        return ofrepProvider.getObjectEvaluation(key, defaultValue, ctx);
+    }
+
+    // ===============================
+    // Bulk Flag Evaluation (Direct HTTP - OFREP providers don't expose bulk API)
     // ===============================
 
     /**
      * Evaluate all flags for the given context.
      * Returns a list of all flag evaluations with their keys, values, types, and reasons.
+     *
+     * Note: This method makes direct HTTP calls since OFREP providers don't expose
+     * the bulk evaluation API.
      *
      * @param context The evaluation context
      * @return List of flag evaluations
@@ -251,6 +313,9 @@ public class FlipswitchProvider implements FeatureProvider {
     /**
      * Evaluate a single flag and return its evaluation result.
      *
+     * Note: This method makes direct HTTP calls for demo purposes.
+     * For standard flag evaluation, use the OpenFeature client methods.
+     *
      * @param flagKey The flag key to evaluate
      * @param context The evaluation context
      * @return The flag evaluation, or null if the flag doesn't exist
@@ -305,169 +370,6 @@ public class FlipswitchProvider implements FeatureProvider {
             }
         }
         return null;
-    }
-
-    // ===============================
-    // Flag Resolution Methods
-    // ===============================
-
-    @Override
-    public ProviderEvaluation<Boolean> getBooleanEvaluation(String key, Boolean defaultValue,
-                                                            EvaluationContext ctx) {
-        return resolveFlag(key, defaultValue, ctx, Boolean.class);
-    }
-
-    @Override
-    public ProviderEvaluation<String> getStringEvaluation(String key, String defaultValue,
-                                                          EvaluationContext ctx) {
-        return resolveFlag(key, defaultValue, ctx, String.class);
-    }
-
-    @Override
-    public ProviderEvaluation<Integer> getIntegerEvaluation(String key, Integer defaultValue,
-                                                            EvaluationContext ctx) {
-        return resolveFlag(key, defaultValue, ctx, Integer.class);
-    }
-
-    @Override
-    public ProviderEvaluation<Double> getDoubleEvaluation(String key, Double defaultValue,
-                                                          EvaluationContext ctx) {
-        return resolveFlag(key, defaultValue, ctx, Double.class);
-    }
-
-    @Override
-    public ProviderEvaluation<Value> getObjectEvaluation(String key, Value defaultValue,
-                                                         EvaluationContext ctx) {
-        return resolveFlag(key, defaultValue, ctx, Value.class);
-    }
-
-    /**
-     * Core flag resolution logic using OFREP.
-     */
-    private <T> ProviderEvaluation<T> resolveFlag(String flagKey, T defaultValue,
-                                                   EvaluationContext context, Class<T> type) {
-        try {
-            String url = baseUrl + "/ofrep/v1/evaluate/flags/" + flagKey;
-
-            ObjectNode bodyNode = objectMapper.createObjectNode();
-            ObjectNode contextNode = transformContext(context);
-            bodyNode.set("context", contextNode);
-
-            RequestBody body = RequestBody.create(objectMapper.writeValueAsString(bodyNode), JSON);
-
-            Request request = new Request.Builder()
-                    .url(url)
-                    .header("Content-Type", "application/json")
-                    .header("X-API-Key", apiKey)
-                    .post(body)
-                    .build();
-
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (!response.isSuccessful()) {
-                    if (response.code() == 404) {
-                        return ProviderEvaluation.<T>builder()
-                                .value(defaultValue)
-                                .reason(Reason.ERROR.toString())
-                                .errorCode(ErrorCode.FLAG_NOT_FOUND)
-                                .errorMessage("Flag '" + flagKey + "' not found")
-                                .build();
-                    }
-
-                    String errorBody = response.body() != null ? response.body().string() : "unknown";
-                    return ProviderEvaluation.<T>builder()
-                            .value(defaultValue)
-                            .reason(Reason.ERROR.toString())
-                            .errorCode(ErrorCode.GENERAL)
-                            .errorMessage("OFREP error: " + response.code() + " - " + errorBody)
-                            .build();
-                }
-
-                String responseBody = response.body() != null ? response.body().string() : "{}";
-                JsonNode result = objectMapper.readTree(responseBody);
-
-                T value = extractValue(result.get("value"), defaultValue, type);
-                String variant = result.has("variant") ? result.get("variant").asText() : null;
-                String reason = result.has("reason") ? result.get("reason").asText() : Reason.TARGETING_MATCH.toString();
-
-                return ProviderEvaluation.<T>builder()
-                        .value(value)
-                        .variant(variant)
-                        .reason(reason)
-                        .build();
-            }
-        } catch (Exception e) {
-            log.error("Error resolving flag '{}': {}", flagKey, e.getMessage());
-            return ProviderEvaluation.<T>builder()
-                    .value(defaultValue)
-                    .reason(Reason.ERROR.toString())
-                    .errorCode(ErrorCode.GENERAL)
-                    .errorMessage(e.getMessage())
-                    .build();
-        }
-    }
-
-    /**
-     * Extract typed value from JSON node.
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T extractValue(JsonNode node, T defaultValue, Class<T> type) {
-        if (node == null || node.isNull()) {
-            return defaultValue;
-        }
-
-        try {
-            if (type == Boolean.class) {
-                return (T) Boolean.valueOf(node.asBoolean());
-            } else if (type == String.class) {
-                return (T) node.asText();
-            } else if (type == Integer.class) {
-                return (T) Integer.valueOf(node.asInt());
-            } else if (type == Double.class) {
-                return (T) Double.valueOf(node.asDouble());
-            } else if (type == Value.class) {
-                return (T) jsonNodeToValue(node);
-            }
-        } catch (Exception e) {
-            log.warn("Type conversion error: {}", e.getMessage());
-        }
-
-        return defaultValue;
-    }
-
-    /**
-     * Convert a JsonNode to OpenFeature Value.
-     */
-    private Value jsonNodeToValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return new Value();
-        }
-        if (node.isBoolean()) {
-            return new Value(node.asBoolean());
-        }
-        if (node.isTextual()) {
-            return new Value(node.asText());
-        }
-        if (node.isInt()) {
-            return new Value(node.asInt());
-        }
-        if (node.isDouble() || node.isFloat()) {
-            return new Value(node.asDouble());
-        }
-        if (node.isArray()) {
-            java.util.List<Value> list = new java.util.ArrayList<>();
-            for (JsonNode element : node) {
-                list.add(jsonNodeToValue(element));
-            }
-            return new Value(list);
-        }
-        if (node.isObject()) {
-            MutableStructure structure = new MutableStructure();
-            node.fields().forEachRemaining(entry ->
-                    structure.add(entry.getKey(), jsonNodeToValue(entry.getValue()))
-            );
-            return new Value(structure);
-        }
-        return new Value();
     }
 
     /**
@@ -541,7 +443,6 @@ public class FlipswitchProvider implements FeatureProvider {
         private final String apiKey;
         private String baseUrl = DEFAULT_BASE_URL;
         private boolean enableRealtime = true;
-        private Duration cacheTtl = Duration.ofSeconds(60);
         private OkHttpClient httpClient;
 
         private Builder(String apiKey) {
@@ -566,14 +467,6 @@ public class FlipswitchProvider implements FeatureProvider {
          */
         public Builder enableRealtime(boolean enableRealtime) {
             this.enableRealtime = enableRealtime;
-            return this;
-        }
-
-        /**
-         * Set the cache TTL.
-         */
-        public Builder cacheTtl(Duration cacheTtl) {
-            this.cacheTtl = cacheTtl;
             return this;
         }
 

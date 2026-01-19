@@ -1,29 +1,42 @@
 package dev.flipswitch;
 
-import dev.openfeature.sdk.EvaluationContext;
 import dev.openfeature.sdk.ImmutableContext;
-import dev.openfeature.sdk.ProviderEvaluation;
 import dev.openfeature.sdk.ProviderState;
+import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.*;
 
-import java.time.Duration;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * Tests for FlipswitchProvider.
+ *
+ * Note: These tests focus on FlipswitchProvider's specific functionality:
+ * - Initialization and API key validation
+ * - SSE connection management
+ * - Bulk flag evaluation methods (evaluateAllFlags, evaluateFlag)
+ *
+ * The OpenFeature SDK evaluation methods (getBooleanEvaluation, etc.) are delegated
+ * to the underlying OFREP provider, which has its own test suite.
+ */
 class FlipswitchProviderTest {
 
     private MockWebServer mockServer;
     private FlipswitchProvider provider;
+    private TestDispatcher dispatcher;
 
     @BeforeEach
     void setUp() throws Exception {
         mockServer = new MockWebServer();
+        dispatcher = new TestDispatcher();
+        mockServer.setDispatcher(dispatcher);
         mockServer.start();
     }
 
@@ -42,10 +55,72 @@ class FlipswitchProviderTest {
                 .build();
     }
 
+    /**
+     * Test dispatcher that handles OFREP endpoints dynamically.
+     */
+    static class TestDispatcher extends Dispatcher {
+        private final Map<String, Supplier<MockResponse>> flagResponses = new ConcurrentHashMap<>();
+        private Supplier<MockResponse> bulkResponse = () -> new MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"flags\":[]}");
+        private boolean failInit = false;
+        private int initFailCode = 401;
+
+        void setFlagResponse(String flagKey, Supplier<MockResponse> responseSupplier) {
+            flagResponses.put(flagKey, responseSupplier);
+        }
+
+        void setBulkResponse(Supplier<MockResponse> responseSupplier) {
+            this.bulkResponse = responseSupplier;
+        }
+
+        void setInitFailure(int statusCode) {
+            this.failInit = true;
+            this.initFailCode = statusCode;
+        }
+
+        @NotNull
+        @Override
+        public MockResponse dispatch(@NotNull RecordedRequest request) {
+            String path = request.getPath();
+
+            // Bulk evaluation endpoint (used during init and for evaluateAllFlags)
+            if (path != null && path.equals("/ofrep/v1/evaluate/flags")) {
+                if (failInit) {
+                    return new MockResponse().setResponseCode(initFailCode);
+                }
+                return bulkResponse.get();
+            }
+
+            // Single flag evaluation endpoint (used by evaluateFlag direct HTTP method)
+            if (path != null && path.startsWith("/ofrep/v1/evaluate/flags/")) {
+                String flagKey = path.substring("/ofrep/v1/evaluate/flags/".length());
+                Supplier<MockResponse> responseSupplier = flagResponses.get(flagKey);
+                if (responseSupplier != null) {
+                    return responseSupplier.get();
+                }
+                return new MockResponse()
+                        .setResponseCode(404)
+                        .addHeader("Content-Type", "application/json")
+                        .setBody("{\"key\":\"" + flagKey + "\",\"errorCode\":\"FLAG_NOT_FOUND\"}");
+            }
+
+            // SSE endpoint
+            if (path != null && path.contains("/events")) {
+                return new MockResponse().setResponseCode(200);
+            }
+
+            return new MockResponse().setResponseCode(404);
+        }
+    }
+
+    // ========================================
+    // Initialization Tests
+    // ========================================
+
     @Test
     void initialization_shouldSucceed() throws Exception {
-        mockServer.enqueue(new MockResponse().setResponseCode(200).setBody("{\"flags\":[]}"));
-
         provider = createProvider();
         provider.initialize(new ImmutableContext());
 
@@ -54,7 +129,7 @@ class FlipswitchProviderTest {
 
     @Test
     void initialization_shouldFailOnInvalidApiKey() {
-        mockServer.enqueue(new MockResponse().setResponseCode(401));
+        dispatcher.setInitFailure(401);
 
         provider = createProvider();
 
@@ -65,7 +140,7 @@ class FlipswitchProviderTest {
 
     @Test
     void initialization_shouldFailOnForbidden() {
-        mockServer.enqueue(new MockResponse().setResponseCode(403));
+        dispatcher.setInitFailure(403);
 
         provider = createProvider();
 
@@ -76,219 +151,181 @@ class FlipswitchProviderTest {
 
     @Test
     void initialization_shouldFailOnServerError() {
-        mockServer.enqueue(new MockResponse().setResponseCode(500));
+        dispatcher.setInitFailure(500);
 
         provider = createProvider();
 
-        assertThrows(Exception.class, () -> provider.initialize(new ImmutableContext()));
+        Exception exception = assertThrows(Exception.class, () -> provider.initialize(new ImmutableContext()));
+        assertTrue(exception.getMessage().contains("Failed to connect"));
         assertEquals(ProviderState.ERROR, provider.getState());
     }
 
-    @Test
-    void getBooleanEvaluation_shouldResolveFlag() throws Exception {
-        mockServer.enqueue(new MockResponse().setResponseCode(200));
-        mockServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{\"value\":true,\"variant\":\"on\",\"reason\":\"TARGETING_MATCH\"}"));
-
-        provider = createProvider();
-        provider.initialize(new ImmutableContext());
-
-        ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation(
-                "dark-mode", false, new ImmutableContext("user-1"));
-
-        assertTrue(result.getValue());
-        assertEquals("on", result.getVariant());
-        assertEquals("TARGETING_MATCH", result.getReason());
-    }
-
-    @Test
-    void getStringEvaluation_shouldResolveFlag() throws Exception {
-        mockServer.enqueue(new MockResponse().setResponseCode(200));
-        mockServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{\"value\":\"Welcome!\",\"variant\":\"greeting\"}"));
-
-        provider = createProvider();
-        provider.initialize(new ImmutableContext());
-
-        ProviderEvaluation<String> result = provider.getStringEvaluation(
-                "welcome-message", "Hello", new ImmutableContext());
-
-        assertEquals("Welcome!", result.getValue());
-    }
-
-    @Test
-    void getIntegerEvaluation_shouldResolveFlag() throws Exception {
-        mockServer.enqueue(new MockResponse().setResponseCode(200));
-        mockServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{\"value\":42,\"variant\":\"large\"}"));
-
-        provider = createProvider();
-        provider.initialize(new ImmutableContext());
-
-        ProviderEvaluation<Integer> result = provider.getIntegerEvaluation(
-                "max-items", 10, new ImmutableContext());
-
-        assertEquals(42, result.getValue());
-    }
-
-    @Test
-    void getDoubleEvaluation_shouldResolveFlag() throws Exception {
-        mockServer.enqueue(new MockResponse().setResponseCode(200));
-        mockServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{\"value\":3.14,\"variant\":\"pi\"}"));
-
-        provider = createProvider();
-        provider.initialize(new ImmutableContext());
-
-        ProviderEvaluation<Double> result = provider.getDoubleEvaluation(
-                "discount-rate", 0.0, new ImmutableContext());
-
-        assertEquals(3.14, result.getValue(), 0.001);
-    }
-
-    @Test
-    void evaluation_shouldReturnDefaultOn404() throws Exception {
-        mockServer.enqueue(new MockResponse().setResponseCode(200));
-        mockServer.enqueue(new MockResponse().setResponseCode(404));
-
-        provider = createProvider();
-        provider.initialize(new ImmutableContext());
-
-        ProviderEvaluation<Boolean> result = provider.getBooleanEvaluation(
-                "nonexistent", true, new ImmutableContext());
-
-        assertTrue(result.getValue());
-        assertNotNull(result.getErrorCode());
-    }
-
-    @Test
-    void evaluation_shouldSendApiKeyHeader() throws Exception {
-        mockServer.enqueue(new MockResponse().setResponseCode(200));
-        mockServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{\"value\":true}"));
-
-        provider = createProvider();
-        provider.initialize(new ImmutableContext());
-        provider.getBooleanEvaluation("test", false, new ImmutableContext());
-
-        mockServer.takeRequest(); // init request
-        RecordedRequest evalRequest = mockServer.takeRequest();
-
-        assertEquals("test-api-key", evalRequest.getHeader("X-API-Key"));
-    }
-
-    @Test
-    void evaluation_shouldIncludeContext() throws Exception {
-        mockServer.enqueue(new MockResponse().setResponseCode(200));
-        mockServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{\"value\":true}"));
-
-        provider = createProvider();
-        provider.initialize(new ImmutableContext());
-
-        Map<String, dev.openfeature.sdk.Value> attrs = new HashMap<>();
-        attrs.put("email", new dev.openfeature.sdk.Value("test@example.com"));
-        attrs.put("plan", new dev.openfeature.sdk.Value("premium"));
-        EvaluationContext context = new ImmutableContext("user-123", attrs);
-
-        provider.getBooleanEvaluation("test", false, context);
-
-        mockServer.takeRequest(); // init request
-        RecordedRequest evalRequest = mockServer.takeRequest();
-        String body = evalRequest.getBody().readUtf8();
-
-        assertTrue(body.contains("\"targetingKey\":\"user-123\""));
-        assertTrue(body.contains("\"email\":\"test@example.com\""));
-        assertTrue(body.contains("\"plan\":\"premium\""));
-    }
+    // ========================================
+    // Metadata Tests
+    // ========================================
 
     @Test
     void metadata_shouldReturnFlipswitch() {
         provider = createProvider();
         assertEquals("flipswitch", provider.getMetadata().getName());
     }
-}
 
-class FlagCacheTest {
+    // ========================================
+    // Bulk Evaluation Tests (Direct HTTP, not via OFREP provider)
+    // ========================================
 
     @Test
-    void shouldStoreAndRetrieveValues() {
-        FlagCache cache = new FlagCache();
-        cache.set("key", "value");
-        assertEquals("value", cache.get("key"));
+    void evaluateAllFlags_shouldReturnAllFlags() throws Exception {
+        dispatcher.setBulkResponse(() -> new MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"flags\":[" +
+                        "{\"key\":\"flag-1\",\"value\":true,\"reason\":\"DEFAULT\"}," +
+                        "{\"key\":\"flag-2\",\"value\":\"test\",\"reason\":\"TARGETING_MATCH\"}" +
+                        "]}"));
+
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        var flags = provider.evaluateAllFlags(new ImmutableContext("user-1"));
+
+        assertEquals(2, flags.size());
+        assertEquals("flag-1", flags.get(0).getKey());
+        assertTrue(flags.get(0).asBoolean());
+        assertEquals("flag-2", flags.get(1).getKey());
+        assertEquals("test", flags.get(1).asString());
     }
 
     @Test
-    void shouldReturnNullForMissingKeys() {
-        FlagCache cache = new FlagCache();
-        assertNull(cache.get("missing"));
+    void evaluateAllFlags_shouldReturnEmptyListOnError() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        // Set bulk response to error after init
+        dispatcher.setInitFailure(500);
+
+        var flags = provider.evaluateAllFlags(new ImmutableContext("user-1"));
+
+        assertEquals(0, flags.size());
     }
 
     @Test
-    void shouldInvalidateSpecificKey() {
-        FlagCache cache = new FlagCache();
-        cache.set("key1", "value1");
-        cache.set("key2", "value2");
+    void evaluateFlag_shouldReturnSingleFlag() throws Exception {
+        dispatcher.setFlagResponse("my-flag", () -> new MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"key\":\"my-flag\",\"value\":\"hello\",\"reason\":\"DEFAULT\",\"variant\":\"v1\"}"));
 
-        cache.invalidate("key1");
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
 
-        assertNull(cache.get("key1"));
-        assertEquals("value2", cache.get("key2"));
+        FlagEvaluation result = provider.evaluateFlag("my-flag", new ImmutableContext());
+
+        assertNotNull(result);
+        assertEquals("my-flag", result.getKey());
+        assertEquals("hello", result.asString());
+        assertEquals("DEFAULT", result.getReason());
+        assertEquals("v1", result.getVariant());
     }
 
     @Test
-    void shouldInvalidateAllKeys() {
-        FlagCache cache = new FlagCache();
-        cache.set("key1", "value1");
-        cache.set("key2", "value2");
+    void evaluateFlag_shouldReturnNullForNonexistent() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
 
-        cache.invalidateAll();
+        FlagEvaluation result = provider.evaluateFlag("nonexistent", new ImmutableContext());
 
-        assertNull(cache.get("key1"));
-        assertNull(cache.get("key2"));
+        assertNull(result);
     }
 
     @Test
-    void shouldHandleFlagChangeEventWithSpecificKey() {
-        FlagCache cache = new FlagCache();
-        cache.set("flag-1", true);
-        cache.set("flag-2", false);
+    void evaluateFlag_shouldHandleBooleanValues() throws Exception {
+        dispatcher.setFlagResponse("bool-flag", () -> new MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"key\":\"bool-flag\",\"value\":true}"));
 
-        FlagChangeEvent event = new FlagChangeEvent("flag-1", "2024-01-01T00:00:00Z");
-        cache.handleFlagChange(event);
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
 
-        assertNull(cache.get("flag-1"));
-        assertEquals(false, cache.get("flag-2"));
+        FlagEvaluation result = provider.evaluateFlag("bool-flag", new ImmutableContext());
+
+        assertNotNull(result);
+        assertTrue(result.asBoolean());
     }
 
     @Test
-    void shouldHandleFlagChangeEventWithNullKey() {
-        FlagCache cache = new FlagCache();
-        cache.set("flag-1", true);
-        cache.set("flag-2", false);
+    void evaluateFlag_shouldHandleNumericValues() throws Exception {
+        dispatcher.setFlagResponse("num-flag", () -> new MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"key\":\"num-flag\",\"value\":42}"));
 
-        FlagChangeEvent event = new FlagChangeEvent(null, "2024-01-01T00:00:00Z");
-        cache.handleFlagChange(event);
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
 
-        assertNull(cache.get("flag-1"));
-        assertNull(cache.get("flag-2"));
+        FlagEvaluation result = provider.evaluateFlag("num-flag", new ImmutableContext());
+
+        assertNotNull(result);
+        assertEquals(42, result.asInt());
+    }
+
+    // ========================================
+    // SSE Status Tests
+    // ========================================
+
+    @Test
+    void sseStatus_shouldBeDisconnectedWhenRealtimeDisabled() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        assertEquals(SseClient.ConnectionStatus.DISCONNECTED, provider.getSseStatus());
+    }
+
+    // ========================================
+    // Flag Change Listener Tests
+    // ========================================
+
+    @Test
+    void flagChangeListener_canBeAddedAndRemoved() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        var events = new java.util.ArrayList<FlagChangeEvent>();
+        java.util.function.Consumer<FlagChangeEvent> listener = events::add;
+
+        provider.addFlagChangeListener(listener);
+        provider.removeFlagChangeListener(listener);
+
+        // Verify no exceptions thrown - listener management works
+        assertEquals(0, events.size());
+    }
+
+    // ========================================
+    // Builder Tests
+    // ========================================
+
+    @Test
+    void builder_shouldRequireApiKey() {
+        assertThrows(IllegalArgumentException.class, () -> FlipswitchProvider.builder(null));
+        assertThrows(IllegalArgumentException.class, () -> FlipswitchProvider.builder(""));
     }
 
     @Test
-    void shouldExpireValuesAfterTtl() throws InterruptedException {
-        FlagCache cache = new FlagCache(Duration.ofMillis(50));
-        cache.set("key", "value");
+    void builder_shouldUseDefaults() {
+        provider = FlipswitchProvider.builder("test-key")
+                .enableRealtime(false)
+                .build();
 
-        assertEquals("value", cache.get("key"));
+        assertEquals("flipswitch", provider.getMetadata().getName());
+    }
 
-        TimeUnit.MILLISECONDS.sleep(60);
+    @Test
+    void builder_shouldAllowCustomBaseUrl() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
 
-        assertNull(cache.get("key"));
+        // If we get here without exception, the custom baseUrl was used
+        assertEquals(ProviderState.READY, provider.getState());
     }
 }

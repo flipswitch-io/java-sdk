@@ -40,12 +40,11 @@
             <version>${openfeature.version}</version>
         </dependency>
 
-        <!-- OFREP Provider (optional - for users who want to use underlying provider) -->
+        <!-- OFREP Provider (used internally for flag evaluation) -->
         <dependency>
             <groupId>dev.openfeature.contrib.providers</groupId>
             <artifactId>ofrep</artifactId>
             <version>${ofrep.version}</version>
-            <optional>true</optional>
         </dependency>
 
         <!-- OkHttp for SSE -->
