@@ -55,7 +55,7 @@ int maxItems = client.getIntegerValue("max-items-per-page", 10);
 
 ```java
 FlipswitchProvider provider = FlipswitchProvider.builder("your-api-key")
-    .baseUrl("https://custom.server.com")    // Optional: defaults to https://api.flipswitch.dev
+    .baseUrl("https://custom.server.com")    // Optional: defaults to https://api.flipswitch.io
     .enableRealtime(true)                    // Optional: defaults to true
     .cacheTtl(Duration.ofSeconds(60))        // Optional: defaults to 60s
     .httpClient(customOkHttpClient)          // Optional: custom OkHttpClient
@@ -65,7 +65,7 @@ FlipswitchProvider provider = FlipswitchProvider.builder("your-api-key")
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `apiKey` | `String` | *required* | Environment API key from dashboard |
-| `baseUrl` | `String` | `https://api.flipswitch.dev` | Your Flipswitch server URL |
+| `baseUrl` | `String` | `https://api.flipswitch.io` | Your Flipswitch server URL |
 | `enableRealtime` | `boolean` | `true` | Enable SSE for real-time flag updates |
 | `cacheTtl` | `Duration` | `60s` | Cache time-to-live |
 | `httpClient` | `OkHttpClient` | default | Custom HTTP client |

@@ -40,7 +40,7 @@ public class FlipswitchProvider extends EventProvider {
 
     private static final Logger log = LoggerFactory.getLogger(FlipswitchProvider.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-    private static final String DEFAULT_BASE_URL = "https://api.flipswitch.dev";
+    private static final String DEFAULT_BASE_URL = "https://api.flipswitch.io";
 
     private final String baseUrl;
     private final String apiKey;
@@ -454,7 +454,7 @@ public class FlipswitchProvider extends EventProvider {
 
         /**
          * Set the Flipswitch server base URL.
-         * Defaults to https://api.flipswitch.dev
+         * Defaults to https://api.flipswitch.io
          */
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
