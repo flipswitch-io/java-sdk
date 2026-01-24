@@ -2,10 +2,10 @@ package dev.flipswitch;
 
 import dev.openfeature.sdk.ImmutableContext;
 import dev.openfeature.sdk.ProviderState;
-import okhttp3.mockwebserver.Dispatcher;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.RecordedRequest;
+import mockwebserver3.Dispatcher;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
+import mockwebserver3.RecordedRequest;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.*;
 
@@ -45,7 +45,7 @@ class FlipswitchProviderTest {
         if (provider != null) {
             provider.shutdown();
         }
-        mockServer.shutdown();
+        mockServer.close();
     }
 
     private FlipswitchProvider createProvider() {
@@ -60,10 +60,11 @@ class FlipswitchProviderTest {
      */
     static class TestDispatcher extends Dispatcher {
         private final Map<String, Supplier<MockResponse>> flagResponses = new ConcurrentHashMap<>();
-        private Supplier<MockResponse> bulkResponse = () -> new MockResponse()
-                .setResponseCode(200)
+        private Supplier<MockResponse> bulkResponse = () -> new MockResponse.Builder()
+                .code(200)
                 .addHeader("Content-Type", "application/json")
-                .setBody("{\"flags\":[]}");
+                .body("{\"flags\":[]}")
+                .build();
         private boolean failInit = false;
         private int initFailCode = 401;
 
@@ -83,12 +84,12 @@ class FlipswitchProviderTest {
         @NotNull
         @Override
         public MockResponse dispatch(@NotNull RecordedRequest request) {
-            String path = request.getPath();
+            String path = request.getUrl() != null ? request.getUrl().encodedPath() : null;
 
             // Bulk evaluation endpoint (used during init and for evaluateAllFlags)
             if (path != null && path.equals("/ofrep/v1/evaluate/flags")) {
                 if (failInit) {
-                    return new MockResponse().setResponseCode(initFailCode);
+                    return new MockResponse.Builder().code(initFailCode).build();
                 }
                 return bulkResponse.get();
             }
@@ -100,18 +101,19 @@ class FlipswitchProviderTest {
                 if (responseSupplier != null) {
                     return responseSupplier.get();
                 }
-                return new MockResponse()
-                        .setResponseCode(404)
+                return new MockResponse.Builder()
+                        .code(404)
                         .addHeader("Content-Type", "application/json")
-                        .setBody("{\"key\":\"" + flagKey + "\",\"errorCode\":\"FLAG_NOT_FOUND\"}");
+                        .body("{\"key\":\"" + flagKey + "\",\"errorCode\":\"FLAG_NOT_FOUND\"}")
+                        .build();
             }
 
             // SSE endpoint
             if (path != null && path.contains("/events")) {
-                return new MockResponse().setResponseCode(200);
+                return new MockResponse.Builder().code(200).build();
             }
 
-            return new MockResponse().setResponseCode(404);
+            return new MockResponse.Builder().code(404).build();
         }
     }
 
@@ -176,13 +178,14 @@ class FlipswitchProviderTest {
 
     @Test
     void evaluateAllFlags_shouldReturnAllFlags() throws Exception {
-        dispatcher.setBulkResponse(() -> new MockResponse()
-                .setResponseCode(200)
+        dispatcher.setBulkResponse(() -> new MockResponse.Builder()
+                .code(200)
                 .addHeader("Content-Type", "application/json")
-                .setBody("{\"flags\":[" +
+                .body("{\"flags\":[" +
                         "{\"key\":\"flag-1\",\"value\":true,\"reason\":\"DEFAULT\"}," +
                         "{\"key\":\"flag-2\",\"value\":\"test\",\"reason\":\"TARGETING_MATCH\"}" +
-                        "]}"));
+                        "]}")
+                .build());
 
         provider = createProvider();
         provider.initialize(new ImmutableContext());
@@ -211,10 +214,11 @@ class FlipswitchProviderTest {
 
     @Test
     void evaluateFlag_shouldReturnSingleFlag() throws Exception {
-        dispatcher.setFlagResponse("my-flag", () -> new MockResponse()
-                .setResponseCode(200)
+        dispatcher.setFlagResponse("my-flag", () -> new MockResponse.Builder()
+                .code(200)
                 .addHeader("Content-Type", "application/json")
-                .setBody("{\"key\":\"my-flag\",\"value\":\"hello\",\"reason\":\"DEFAULT\",\"variant\":\"v1\"}"));
+                .body("{\"key\":\"my-flag\",\"value\":\"hello\",\"reason\":\"DEFAULT\",\"variant\":\"v1\"}")
+                .build());
 
         provider = createProvider();
         provider.initialize(new ImmutableContext());
@@ -240,10 +244,11 @@ class FlipswitchProviderTest {
 
     @Test
     void evaluateFlag_shouldHandleBooleanValues() throws Exception {
-        dispatcher.setFlagResponse("bool-flag", () -> new MockResponse()
-                .setResponseCode(200)
+        dispatcher.setFlagResponse("bool-flag", () -> new MockResponse.Builder()
+                .code(200)
                 .addHeader("Content-Type", "application/json")
-                .setBody("{\"key\":\"bool-flag\",\"value\":true}"));
+                .body("{\"key\":\"bool-flag\",\"value\":true}")
+                .build());
 
         provider = createProvider();
         provider.initialize(new ImmutableContext());
@@ -256,10 +261,11 @@ class FlipswitchProviderTest {
 
     @Test
     void evaluateFlag_shouldHandleNumericValues() throws Exception {
-        dispatcher.setFlagResponse("num-flag", () -> new MockResponse()
-                .setResponseCode(200)
+        dispatcher.setFlagResponse("num-flag", () -> new MockResponse.Builder()
+                .code(200)
                 .addHeader("Content-Type", "application/json")
-                .setBody("{\"key\":\"num-flag\",\"value\":42}"));
+                .body("{\"key\":\"num-flag\",\"value\":42}")
+                .build());
 
         provider = createProvider();
         provider.initialize(new ImmutableContext());

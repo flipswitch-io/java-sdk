@@ -1,6 +1,7 @@
 package dev.flipswitch;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.squareup.moshi.JsonAdapter;
+import com.squareup.moshi.Moshi;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -33,7 +34,7 @@ public class SseClient {
     private final Consumer<FlagChangeEvent> onFlagChange;
     private final Consumer<ConnectionStatus> onStatusChange;
     private final OkHttpClient httpClient;
-    private final ObjectMapper objectMapper;
+    private final JsonAdapter<FlagChangeEvent> eventAdapter;
     private final ScheduledExecutorService scheduler;
 
     private EventSource eventSource;
@@ -69,7 +70,8 @@ public class SseClient {
         this.httpClient = new OkHttpClient.Builder()
                 .readTimeout(0, TimeUnit.MILLISECONDS) // No timeout for SSE
                 .build();
-        this.objectMapper = new ObjectMapper();
+        Moshi moshi = new Moshi.Builder().build();
+        this.eventAdapter = moshi.adapter(FlagChangeEvent.class);
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "flipswitch-sse-reconnect");
             t.setDaemon(true);
@@ -140,9 +142,11 @@ public class SseClient {
 
         if ("flag-change".equals(type)) {
             try {
-                FlagChangeEvent event = objectMapper.readValue(data, FlagChangeEvent.class);
+                FlagChangeEvent event = eventAdapter.fromJson(data);
                 log.debug("Flag change event: {}", event);
-                onFlagChange.accept(event);
+                if (event != null) {
+                    onFlagChange.accept(event);
+                }
             } catch (Exception e) {
                 log.error("Failed to parse flag-change event: {}", e.getMessage());
             }

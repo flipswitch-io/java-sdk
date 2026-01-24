@@ -54,7 +54,7 @@ public class FlipswitchDemo {
 
         // Add a listener for flag changes - re-evaluate and show new value
         provider.addFlagChangeListener(event -> {
-            String flagKey = event.getFlagKey();
+            String flagKey = event.flagKey();
             System.out.println("\n*** Flag changed: " + (flagKey != null ? flagKey : "all flags") + " ***");
 
             if (flagKey != null) {

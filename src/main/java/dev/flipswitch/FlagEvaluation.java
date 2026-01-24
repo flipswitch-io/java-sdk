@@ -1,6 +1,7 @@
 package dev.flipswitch;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Represents the result of evaluating a single flag.
@@ -8,16 +9,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 public class FlagEvaluation {
 
     private final String key;
-    private final JsonNode value;
+    private final Object value;
     private final String valueType;
     private final String reason;
     private final String variant;
 
-    public FlagEvaluation(String key, JsonNode value, String reason, String variant) {
+    public FlagEvaluation(String key, Object value, String reason, String variant) {
         this(key, value, reason, variant, null);
     }
 
-    public FlagEvaluation(String key, JsonNode value, String reason, String variant, String metadataFlagType) {
+    public FlagEvaluation(String key, Object value, String reason, String variant, String metadataFlagType) {
         this.key = key;
         this.value = value;
         this.valueType = getTypeFromMetadataOrInfer(metadataFlagType, value);
@@ -25,7 +26,7 @@ public class FlagEvaluation {
         this.variant = variant;
     }
 
-    private static String getTypeFromMetadataOrInfer(String metadataFlagType, JsonNode value) {
+    private static String getTypeFromMetadataOrInfer(String metadataFlagType, Object value) {
         // Prefer metadata.flagType if available (especially useful for disabled flags)
         if (metadataFlagType != null && !metadataFlagType.isEmpty()) {
             // Map backend types to SDK types
@@ -41,20 +42,20 @@ public class FlagEvaluation {
         return inferType(value);
     }
 
-    private static String inferType(JsonNode node) {
-        if (node == null || node.isNull()) {
+    private static String inferType(Object value) {
+        if (value == null) {
             return "null";
-        } else if (node.isBoolean()) {
+        } else if (value instanceof Boolean) {
             return "boolean";
-        } else if (node.isInt() || node.isLong()) {
+        } else if (value instanceof Integer || value instanceof Long) {
             return "integer";
-        } else if (node.isDouble() || node.isFloat() || node.isNumber()) {
+        } else if (value instanceof Double || value instanceof Float || value instanceof Number) {
             return "number";
-        } else if (node.isTextual()) {
+        } else if (value instanceof String) {
             return "string";
-        } else if (node.isArray()) {
+        } else if (value instanceof List) {
             return "array";
-        } else if (node.isObject()) {
+        } else if (value instanceof Map) {
             return "object";
         }
         return "unknown";
@@ -64,7 +65,7 @@ public class FlagEvaluation {
         return key;
     }
 
-    public JsonNode getValue() {
+    public Object getValue() {
         return value;
     }
 
@@ -72,10 +73,10 @@ public class FlagEvaluation {
      * Get the value as a displayable string.
      */
     public String getValueAsString() {
-        if (value == null || value.isNull()) {
+        if (value == null) {
             return "null";
-        } else if (value.isTextual()) {
-            return "\"" + value.asText() + "\"";
+        } else if (value instanceof String) {
+            return "\"" + value + "\"";
         } else {
             return value.toString();
         }
@@ -99,19 +100,31 @@ public class FlagEvaluation {
     // Convenience methods for typed access
 
     public boolean asBoolean() {
-        return value != null && value.asBoolean();
+        if (value instanceof Boolean) {
+            return (Boolean) value;
+        }
+        return false;
     }
 
     public int asInt() {
-        return value != null ? value.asInt() : 0;
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        return 0;
     }
 
     public double asDouble() {
-        return value != null ? value.asDouble() : 0.0;
+        if (value instanceof Number) {
+            return ((Number) value).doubleValue();
+        }
+        return 0.0;
     }
 
     public String asString() {
-        return value != null ? value.asText() : null;
+        if (value instanceof String) {
+            return (String) value;
+        }
+        return value != null ? value.toString() : null;
     }
 
     @Override

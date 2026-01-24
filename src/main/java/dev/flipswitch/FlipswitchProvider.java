@@ -1,10 +1,10 @@
 package dev.flipswitch;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.squareup.moshi.JsonAdapter;
+import com.squareup.moshi.Moshi;
+import com.squareup.moshi.Types;
 import dev.openfeature.contrib.providers.ofrep.OfrepProvider;
 import dev.openfeature.contrib.providers.ofrep.OfrepProviderOptions;
 import dev.openfeature.sdk.*;
@@ -13,7 +13,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -46,7 +48,8 @@ public class FlipswitchProvider extends EventProvider {
     private final String apiKey;
     private final boolean enableRealtime;
     private final OkHttpClient httpClient;
-    private final ObjectMapper objectMapper;
+    private final Moshi moshi;
+    private final JsonAdapter<Map<String, Object>> mapAdapter;
     private final OfrepProvider ofrepProvider;
     private final CopyOnWriteArrayList<Consumer<FlagChangeEvent>> flagChangeListeners;
 
@@ -58,7 +61,9 @@ public class FlipswitchProvider extends EventProvider {
         this.apiKey = builder.apiKey;
         this.enableRealtime = builder.enableRealtime;
         this.httpClient = builder.httpClient != null ? builder.httpClient : new OkHttpClient();
-        this.objectMapper = new ObjectMapper();
+        this.moshi = new Moshi.Builder().build();
+        Type mapType = Types.newParameterizedType(Map.class, String.class, Object.class);
+        this.mapAdapter = moshi.adapter(mapType);
         this.flagChangeListeners = new CopyOnWriteArrayList<>();
 
         // Create underlying OFREP provider for flag evaluation
@@ -266,11 +271,11 @@ public class FlipswitchProvider extends EventProvider {
         try {
             String url = baseUrl + "/ofrep/v1/evaluate/flags";
 
-            ObjectNode bodyNode = objectMapper.createObjectNode();
-            ObjectNode contextNode = transformContext(context);
-            bodyNode.set("context", contextNode);
+            Map<String, Object> bodyMap = new LinkedHashMap<>();
+            Map<String, Object> contextMap = transformContext(context);
+            bodyMap.put("context", contextMap);
 
-            RequestBody body = RequestBody.create(objectMapper.writeValueAsString(bodyNode), JSON);
+            RequestBody body = RequestBody.create(mapAdapter.toJson(bodyMap), JSON);
 
             Request request = new Request.Builder()
                     .url(url)
@@ -286,19 +291,25 @@ public class FlipswitchProvider extends EventProvider {
                 }
 
                 String responseBody = response.body() != null ? response.body().string() : "{}";
-                JsonNode result = objectMapper.readTree(responseBody);
+                Map<String, Object> result = mapAdapter.fromJson(responseBody);
 
-                JsonNode flags = result.get("flags");
-                if (flags != null && flags.isArray()) {
-                    for (JsonNode flag : flags) {
-                        String key = flag.has("key") ? flag.get("key").asText() : null;
-                        JsonNode value = flag.get("value");
-                        String reason = flag.has("reason") ? flag.get("reason").asText() : null;
-                        String variant = flag.has("variant") ? flag.get("variant").asText() : null;
-                        String flagType = extractFlagTypeFromMetadata(flag);
+                if (result != null) {
+                    Object flagsObj = result.get("flags");
+                    if (flagsObj instanceof List<?> flags) {
+                        for (Object flagObj : flags) {
+                            if (flagObj instanceof Map<?, ?> flag) {
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> flagMap = (Map<String, Object>) flag;
+                                String key = getStringValue(flagMap, "key");
+                                Object value = flagMap.get("value");
+                                String reason = getStringValue(flagMap, "reason");
+                                String variant = getStringValue(flagMap, "variant");
+                                String flagType = extractFlagTypeFromMetadata(flagMap);
 
-                        if (key != null) {
-                            results.add(new FlagEvaluation(key, value, reason, variant, flagType));
+                                if (key != null) {
+                                    results.add(new FlagEvaluation(key, value, reason, variant, flagType));
+                                }
+                            }
                         }
                     }
                 }
@@ -324,11 +335,11 @@ public class FlipswitchProvider extends EventProvider {
         try {
             String url = baseUrl + "/ofrep/v1/evaluate/flags/" + flagKey;
 
-            ObjectNode bodyNode = objectMapper.createObjectNode();
-            ObjectNode contextNode = transformContext(context);
-            bodyNode.set("context", contextNode);
+            Map<String, Object> bodyMap = new LinkedHashMap<>();
+            Map<String, Object> contextMap = transformContext(context);
+            bodyMap.put("context", contextMap);
 
-            RequestBody body = RequestBody.create(objectMapper.writeValueAsString(bodyNode), JSON);
+            RequestBody body = RequestBody.create(mapAdapter.toJson(bodyMap), JSON);
 
             Request request = new Request.Builder()
                     .url(url)
@@ -343,30 +354,42 @@ public class FlipswitchProvider extends EventProvider {
                 }
 
                 String responseBody = response.body() != null ? response.body().string() : "{}";
-                JsonNode result = objectMapper.readTree(responseBody);
+                Map<String, Object> result = mapAdapter.fromJson(responseBody);
 
-                String key = result.has("key") ? result.get("key").asText() : flagKey;
-                JsonNode value = result.get("value");
-                String reason = result.has("reason") ? result.get("reason").asText() : null;
-                String variant = result.has("variant") ? result.get("variant").asText() : null;
-                String flagType = extractFlagTypeFromMetadata(result);
+                if (result != null) {
+                    String key = getStringValue(result, "key");
+                    if (key == null) key = flagKey;
+                    Object value = result.get("value");
+                    String reason = getStringValue(result, "reason");
+                    String variant = getStringValue(result, "variant");
+                    String flagType = extractFlagTypeFromMetadata(result);
 
-                return new FlagEvaluation(key, value, reason, variant, flagType);
+                    return new FlagEvaluation(key, value, reason, variant, flagType);
+                }
             }
         } catch (Exception e) {
             log.error("Error evaluating flag '{}': {}", flagKey, e.getMessage());
-            return null;
         }
+        return null;
+    }
+
+    /**
+     * Safely get a String value from a map.
+     */
+    private String getStringValue(Map<String, Object> map, String key) {
+        Object value = map.get(key);
+        return value instanceof String ? (String) value : null;
     }
 
     /**
      * Extract flagType from metadata if available.
      */
-    private String extractFlagTypeFromMetadata(JsonNode flagNode) {
-        if (flagNode.has("metadata")) {
-            JsonNode metadata = flagNode.get("metadata");
-            if (metadata.has("flagType")) {
-                return metadata.get("flagType").asText();
+    private String extractFlagTypeFromMetadata(Map<String, Object> flagMap) {
+        Object metadataObj = flagMap.get("metadata");
+        if (metadataObj instanceof Map<?, ?> metadata) {
+            Object flagType = metadata.get("flagType");
+            if (flagType instanceof String) {
+                return (String) flagType;
             }
         }
         return null;
@@ -375,65 +398,51 @@ public class FlipswitchProvider extends EventProvider {
     /**
      * Transform OpenFeature context to OFREP context format.
      */
-    private ObjectNode transformContext(EvaluationContext context) {
-        ObjectNode node = objectMapper.createObjectNode();
+    private Map<String, Object> transformContext(EvaluationContext context) {
+        Map<String, Object> map = new LinkedHashMap<>();
 
         if (context.getTargetingKey() != null) {
-            node.put("targetingKey", context.getTargetingKey());
+            map.put("targetingKey", context.getTargetingKey());
         }
 
         for (Map.Entry<String, Value> entry : context.asMap().entrySet()) {
             String key = entry.getKey();
             if (!"targetingKey".equals(key)) {
-                addValueToNode(node, key, entry.getValue());
+                map.put(key, valueToObject(entry.getValue()));
             }
         }
 
-        return node;
+        return map;
     }
 
     /**
-     * Add an OpenFeature Value to a JSON ObjectNode.
+     * Convert an OpenFeature Value to a plain Java object.
      */
-    private void addValueToNode(ObjectNode node, String key, Value value) {
+    private Object valueToObject(Value value) {
         if (value.isBoolean()) {
-            node.put(key, value.asBoolean());
+            return value.asBoolean();
         } else if (value.isString()) {
-            node.put(key, value.asString());
+            return value.asString();
         } else if (value.isNumber()) {
             if (value.asDouble() == Math.floor(value.asDouble())) {
-                node.put(key, value.asInteger());
+                return value.asInteger();
             } else {
-                node.put(key, value.asDouble());
+                return value.asDouble();
             }
         } else if (value.isList()) {
-            var arrayNode = objectMapper.createArrayNode();
+            List<Object> list = new ArrayList<>();
             for (Value item : value.asList()) {
-                arrayNode.add(valueToJsonNode(item));
+                list.add(valueToObject(item));
             }
-            node.set(key, arrayNode);
+            return list;
         } else if (value.isStructure()) {
-            ObjectNode structNode = objectMapper.createObjectNode();
+            Map<String, Object> structMap = new LinkedHashMap<>();
             for (Map.Entry<String, Value> entry : value.asStructure().asMap().entrySet()) {
-                addValueToNode(structNode, entry.getKey(), entry.getValue());
+                structMap.put(entry.getKey(), valueToObject(entry.getValue()));
             }
-            node.set(key, structNode);
+            return structMap;
         }
-    }
-
-    private JsonNode valueToJsonNode(Value value) {
-        if (value.isBoolean()) {
-            return objectMapper.getNodeFactory().booleanNode(value.asBoolean());
-        } else if (value.isString()) {
-            return objectMapper.getNodeFactory().textNode(value.asString());
-        } else if (value.isNumber()) {
-            if (value.asDouble() == Math.floor(value.asDouble())) {
-                return objectMapper.getNodeFactory().numberNode(value.asInteger());
-            } else {
-                return objectMapper.getNodeFactory().numberNode(value.asDouble());
-            }
-        }
-        return objectMapper.getNodeFactory().nullNode();
+        return null;
     }
 
     /**

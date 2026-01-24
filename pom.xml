@@ -26,8 +26,9 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <openfeature.version>1.20.1</openfeature.version>
         <ofrep.version>0.0.1</ofrep.version>
-        <jackson.version>2.16.1</jackson.version>
+        <moshi.version>1.15.1</moshi.version>
         <okhttp.version>5.3.2</okhttp.version>
+        <okio.version>3.16.4</okio.version>
         <junit.version>6.0.2</junit.version>
         <mockito.version>5.21.0</mockito.version>
     </properties>
@@ -60,11 +61,18 @@
             <version>${okhttp.version}</version>
         </dependency>
 
-        <!-- Jackson for JSON -->
+        <!-- Okio (explicit version to resolve conflicts) -->
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>${jackson.version}</version>
+            <groupId>com.squareup.okio</groupId>
+            <artifactId>okio</artifactId>
+            <version>${okio.version}</version>
+        </dependency>
+
+        <!-- Moshi for JSON -->
+        <dependency>
+            <groupId>com.squareup.moshi</groupId>
+            <artifactId>moshi</artifactId>
+            <version>${moshi.version}</version>
         </dependency>
 
         <!-- Guava for immutable collections -->
@@ -105,7 +113,7 @@
 
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>mockwebserver</artifactId>
+            <artifactId>mockwebserver3</artifactId>
             <version>${okhttp.version}</version>
             <scope>test</scope>
         </dependency>
