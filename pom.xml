@@ -27,7 +27,7 @@
         <openfeature.version>1.20.1</openfeature.version>
         <ofrep.version>0.0.1</ofrep.version>
         <jackson.version>2.16.1</jackson.version>
-        <okhttp.version>4.12.0</okhttp.version>
+        <okhttp.version>5.3.2</okhttp.version>
         <junit.version>6.0.2</junit.version>
         <mockito.version>5.21.0</mockito.version>
     </properties>
