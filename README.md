@@ -1,6 +1,9 @@
 # Flipswitch Java SDK
 
-Flipswitch SDK for Java with real-time SSE support.
+[![CI](https://github.com/flipswitch-io/java-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/flipswitch-io/java-sdk/actions/workflows/ci.yml)
+[![Maven Central](https://img.shields.io/maven-central/v/io.flipswitch/flipswitch-sdk.svg)](https://search.maven.org/artifact/io.flipswitch/flipswitch-sdk)
+
+Flipswitch SDK for Java with real-time SSE support for OpenFeature.
 
 This SDK provides an OpenFeature-compatible provider that wraps OFREP flag evaluation with automatic cache invalidation via Server-Sent Events (SSE). When flags change in your Flipswitch dashboard, connected clients receive updates in real-time.
 
@@ -15,7 +18,7 @@ This SDK provides an OpenFeature-compatible provider that wraps OFREP flag evalu
 
 ```xml
 <dependency>
-    <groupId>dev.flipswitch</groupId>
+    <groupId>io.flipswitch</groupId>
     <artifactId>flipswitch-sdk</artifactId>
     <version>0.1.0</version>
 </dependency>
@@ -24,13 +27,13 @@ This SDK provides an OpenFeature-compatible provider that wraps OFREP flag evalu
 ### Gradle
 
 ```groovy
-implementation 'dev.flipswitch:flipswitch-sdk:0.1.0'
+implementation 'io.flipswitch:flipswitch-sdk:0.1.0'
 ```
 
 ## Quick Start
 
 ```java
-import dev.flipswitch.FlipswitchProvider;
+import io.flipswitch.FlipswitchProvider;
 import dev.openfeature.sdk.OpenFeatureAPI;
 import dev.openfeature.sdk.Client;
 import dev.openfeature.sdk.MutableContext;
@@ -203,8 +206,7 @@ public class FeatureFlagConfig {
 A complete working demo is included in the test sources. To run it:
 
 ```bash
-cd sdks/java
-mvn compile test-compile exec:java -Dexec.mainClass="dev.flipswitch.examples.FlipswitchDemo" \
+mvn compile test-compile exec:java -Dexec.mainClass="io.flipswitch.examples.FlipswitchDemo" \
     -Dexec.args="<your-api-key>"
 ```
 
@@ -213,8 +215,12 @@ The demo will:
 2. Load and display all flags with their types and values
 3. Listen for real-time flag changes and display updates
 
-See [FlipswitchDemo.java](./src/test/java/dev/flipswitch/examples/FlipswitchDemo.java) for the full source.
+See [FlipswitchDemo.java](./src/test/java/io/flipswitch/examples/FlipswitchDemo.java) for the full source.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-MIT
+MIT - see [LICENSE](LICENSE) for details.

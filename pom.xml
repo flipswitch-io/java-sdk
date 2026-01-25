@@ -11,7 +11,7 @@
 
     <name>Flipswitch SDK</name>
     <description>Flipswitch SDK with real-time SSE support for OpenFeature</description>
-    <url>https://github.com/flipswitch-io/flipswitch</url>
+    <url>https://github.com/flipswitch-io/java-sdk</url>
 
     <developers>
         <developer>
@@ -23,9 +23,9 @@
     </developers>
 
     <scm>
-        <connection>scm:git:git://github.com/flipswitch-io/flipswitch.git</connection>
-        <developerConnection>scm:git:ssh://github.com:flipswitch-io/flipswitch.git</developerConnection>
-        <url>https://github.com/flipswitch-io/flipswitch/tree/main</url>
+        <connection>scm:git:git://github.com/flipswitch-io/java-sdk.git</connection>
+        <developerConnection>scm:git:ssh://github.com:flipswitch-io/java-sdk.git</developerConnection>
+        <url>https://github.com/flipswitch-io/java-sdk/tree/main</url>
     </scm>
 
     <distributionManagement>
