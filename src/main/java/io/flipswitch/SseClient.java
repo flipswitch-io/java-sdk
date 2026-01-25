@@ -11,6 +11,7 @@ import okhttp3.sse.EventSources;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +32,7 @@ public class SseClient {
 
     private final String baseUrl;
     private final String apiKey;
+    private final Map<String, String> telemetryHeaders;
     private final Consumer<FlagChangeEvent> onFlagChange;
     private final Consumer<ConnectionStatus> onStatusChange;
     private final OkHttpClient httpClient;
@@ -55,16 +57,19 @@ public class SseClient {
     /**
      * Create a new SSE client.
      *
-     * @param baseUrl        The Flipswitch server base URL
-     * @param apiKey         The environment API key
-     * @param onFlagChange   Callback for flag change events
-     * @param onStatusChange Callback for connection status changes (can be null)
+     * @param baseUrl          The Flipswitch server base URL
+     * @param apiKey           The environment API key
+     * @param telemetryHeaders Optional telemetry headers to send with SSE requests (can be null)
+     * @param onFlagChange     Callback for flag change events
+     * @param onStatusChange   Callback for connection status changes (can be null)
      */
     public SseClient(String baseUrl, String apiKey,
+                     Map<String, String> telemetryHeaders,
                      Consumer<FlagChangeEvent> onFlagChange,
                      Consumer<ConnectionStatus> onStatusChange) {
         this.baseUrl = baseUrl.replaceAll("/$", "");
         this.apiKey = apiKey;
+        this.telemetryHeaders = telemetryHeaders;
         this.onFlagChange = onFlagChange;
         this.onStatusChange = onStatusChange;
         this.httpClient = new OkHttpClient.Builder()
@@ -92,12 +97,20 @@ public class SseClient {
 
         String url = baseUrl + "/api/v1/flags/events";
 
-        Request request = new Request.Builder()
+        Request.Builder requestBuilder = new Request.Builder()
                 .url(url)
                 .header("X-API-Key", apiKey)
                 .header("Accept", "text/event-stream")
-                .header("Cache-Control", "no-cache")
-                .build();
+                .header("Cache-Control", "no-cache");
+
+        // Add telemetry headers
+        if (telemetryHeaders != null) {
+            for (Map.Entry<String, String> entry : telemetryHeaders.entrySet()) {
+                requestBuilder.header(entry.getKey(), entry.getValue());
+            }
+        }
+
+        Request request = requestBuilder.build();
 
         EventSource.Factory factory = EventSources.createFactory(httpClient);
         eventSource = factory.newEventSource(request, new EventSourceListener() {

@@ -212,9 +212,11 @@ public class FlipswitchProvider extends EventProvider {
      * Start the SSE connection for real-time updates.
      */
     private void startSseConnection() {
+        Map<String, String> telemetryHeaders = getTelemetryHeadersMap();
         sseClient = new SseClient(
                 baseUrl,
                 apiKey,
+                telemetryHeaders,
                 this::handleFlagChange,
                 status -> {
                     if (status == SseClient.ConnectionStatus.ERROR) {
@@ -227,6 +229,21 @@ public class FlipswitchProvider extends EventProvider {
                 }
         );
         sseClient.connect();
+    }
+
+    /**
+     * Get telemetry headers as a map.
+     */
+    private Map<String, String> getTelemetryHeadersMap() {
+        if (!enableTelemetry) {
+            return null;
+        }
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("X-Flipswitch-SDK", getTelemetrySdkHeader());
+        headers.put("X-Flipswitch-Runtime", getTelemetryRuntimeHeader());
+        headers.put("X-Flipswitch-OS", getTelemetryOsHeader());
+        headers.put("X-Flipswitch-Features", getTelemetryFeaturesHeader());
+        return headers;
     }
 
     /**
