@@ -11,7 +11,33 @@
 
     <name>Flipswitch SDK</name>
     <description>Flipswitch SDK with real-time SSE support for OpenFeature</description>
-    <url>https://github.com/flipswitch-dev/flipswitch</url>
+    <url>https://github.com/flipswitch-io/flipswitch</url>
+
+    <developers>
+        <developer>
+            <name>Flipswitch Team</name>
+            <email>hello@flipswitch.io</email>
+            <organization>Flipswitch</organization>
+            <organizationUrl>https://flipswitch.io</organizationUrl>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:git://github.com/flipswitch-io/flipswitch.git</connection>
+        <developerConnection>scm:git:ssh://github.com:flipswitch-io/flipswitch.git</developerConnection>
+        <url>https://github.com/flipswitch-io/flipswitch/tree/main</url>
+    </scm>
+
+    <distributionManagement>
+        <snapshotRepository>
+            <id>central</id>
+            <url>https://s01.oss.sonatype.org/content/repositories/snapshots</url>
+        </snapshotRepository>
+        <repository>
+            <id>central</id>
+            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+        </repository>
+    </distributionManagement>
 
     <licenses>
         <license>
@@ -182,4 +208,44 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.7.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
