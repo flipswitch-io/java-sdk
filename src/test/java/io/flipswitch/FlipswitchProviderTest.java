@@ -1,4 +1,4 @@
-package dev.flipswitch;
+package io.flipswitch;
 
 import dev.openfeature.sdk.ImmutableContext;
 import dev.openfeature.sdk.ProviderState;

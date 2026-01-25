@@ -1,4 +1,4 @@
-package dev.flipswitch;
+package io.flipswitch;
 
 import java.util.List;
 import java.util.Map;

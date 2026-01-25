@@ -1,7 +1,7 @@
-package dev.flipswitch.examples;
+package io.flipswitch.examples;
 
-import dev.flipswitch.FlagEvaluation;
-import dev.flipswitch.FlipswitchProvider;
+import io.flipswitch.FlagEvaluation;
+import io.flipswitch.FlipswitchProvider;
 import dev.openfeature.sdk.MutableContext;
 import dev.openfeature.sdk.OpenFeatureAPI;
 
@@ -12,8 +12,14 @@ import java.util.List;
  *
  * <p>Run this demo with:
  * <pre>{@code
- * mvn compile test-compile exec:java -Dexec.mainClass="dev.flipswitch.examples.FlipswitchDemo" \
- *     -Dexec.args="your-api-key"
+ * mvn compile test-compile exec:java -Dexec.mainClass="io.flipswitch.examples.FlipswitchDemo" \
+ *     -Dexec.args="your-api-key [base-url]"
+ * }</pre>
+ *
+ * <p>Or set the FLIPSWITCH_BASE_URL environment variable:
+ * <pre>{@code
+ * FLIPSWITCH_BASE_URL=http://localhost:8080 mvn compile test-compile exec:java \
+ *     -Dexec.mainClass="io.flipswitch.examples.FlipswitchDemo" -Dexec.args="your-api-key"
  * }</pre>
  */
 public class FlipswitchDemo {
@@ -23,17 +29,34 @@ public class FlipswitchDemo {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
-            System.err.println("Usage: FlipswitchDemo <api-key>");
+            System.err.println("Usage: FlipswitchDemo <api-key> [base-url]");
+            System.err.println("       Or set FLIPSWITCH_BASE_URL environment variable");
             System.exit(1);
         }
 
         String apiKey = args[0];
 
+        // Get base URL from command line or environment variable
+        String baseUrl = null;
+        if (args.length >= 2) {
+            baseUrl = args[1];
+        } else {
+            baseUrl = System.getenv("FLIPSWITCH_BASE_URL");
+        }
+
         System.out.println("Flipswitch Java SDK Demo");
         System.out.println("========================\n");
 
+        if (baseUrl != null && !baseUrl.isEmpty()) {
+            System.out.println("Using base URL: " + baseUrl);
+        }
+
         // API key is required, all other options have sensible defaults
-        provider = FlipswitchProvider.builder(apiKey).build();
+        FlipswitchProvider.Builder builder = FlipswitchProvider.builder(apiKey);
+        if (baseUrl != null && !baseUrl.isEmpty()) {
+            builder.baseUrl(baseUrl);
+        }
+        provider = builder.build();
 
         // Register the provider with OpenFeature
         OpenFeatureAPI api = OpenFeatureAPI.getInstance();

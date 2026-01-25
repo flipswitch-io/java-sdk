@@ -1,4 +1,4 @@
-package dev.flipswitch;
+package io.flipswitch;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -43,10 +43,12 @@ public class FlipswitchProvider extends EventProvider {
     private static final Logger log = LoggerFactory.getLogger(FlipswitchProvider.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final String DEFAULT_BASE_URL = "https://api.flipswitch.io";
+    private static final String SDK_VERSION = "0.1.0";
 
     private final String baseUrl;
     private final String apiKey;
     private final boolean enableRealtime;
+    private final boolean enableTelemetry;
     private final OkHttpClient httpClient;
     private final Moshi moshi;
     private final JsonAdapter<Map<String, Object>> mapAdapter;
@@ -60,6 +62,7 @@ public class FlipswitchProvider extends EventProvider {
         this.baseUrl = builder.baseUrl.replaceAll("/$", "");
         this.apiKey = builder.apiKey;
         this.enableRealtime = builder.enableRealtime;
+        this.enableTelemetry = builder.enableTelemetry;
         this.httpClient = builder.httpClient != null ? builder.httpClient : new OkHttpClient();
         this.moshi = new Moshi.Builder().build();
         Type mapType = Types.newParameterizedType(Map.class, String.class, Object.class);
@@ -67,11 +70,56 @@ public class FlipswitchProvider extends EventProvider {
         this.flagChangeListeners = new CopyOnWriteArrayList<>();
 
         // Create underlying OFREP provider for flag evaluation
+        ImmutableMap.Builder<String, ImmutableList<String>> headersBuilder = ImmutableMap.builder();
+        headersBuilder.put("X-API-Key", ImmutableList.of(this.apiKey));
+
+        if (this.enableTelemetry) {
+            headersBuilder.put("X-Flipswitch-SDK", ImmutableList.of(getTelemetrySdkHeader()));
+            headersBuilder.put("X-Flipswitch-Runtime", ImmutableList.of(getTelemetryRuntimeHeader()));
+            headersBuilder.put("X-Flipswitch-OS", ImmutableList.of(getTelemetryOsHeader()));
+            headersBuilder.put("X-Flipswitch-Features", ImmutableList.of(getTelemetryFeaturesHeader()));
+        }
+
         OfrepProviderOptions ofrepOptions = OfrepProviderOptions.builder()
                 .baseUrl(this.baseUrl + "/ofrep/v1")
-                .headers(ImmutableMap.of("X-API-Key", ImmutableList.of(this.apiKey)))
+                .headers(headersBuilder.build())
                 .build();
         this.ofrepProvider = OfrepProvider.constructProvider(ofrepOptions);
+    }
+
+    private String getTelemetrySdkHeader() {
+        return "java/" + SDK_VERSION;
+    }
+
+    private String getTelemetryRuntimeHeader() {
+        return "java/" + System.getProperty("java.version", "unknown");
+    }
+
+    private String getTelemetryOsHeader() {
+        String os = System.getProperty("os.name", "unknown").toLowerCase();
+        String arch = System.getProperty("os.arch", "unknown").toLowerCase();
+
+        // Normalize OS name
+        if (os.contains("mac") || os.contains("darwin")) {
+            os = "darwin";
+        } else if (os.contains("win")) {
+            os = "windows";
+        } else if (os.contains("linux")) {
+            os = "linux";
+        }
+
+        // Normalize architecture
+        if (arch.equals("amd64") || arch.equals("x86_64")) {
+            arch = "amd64";
+        } else if (arch.equals("aarch64")) {
+            arch = "arm64";
+        }
+
+        return os + "/" + arch;
+    }
+
+    private String getTelemetryFeaturesHeader() {
+        return "sse=" + enableRealtime;
     }
 
     /**
@@ -117,14 +165,15 @@ public class FlipswitchProvider extends EventProvider {
      */
     private void validateApiKey() throws IOException {
         RequestBody body = RequestBody.create("{\"context\":{\"targetingKey\":\"_init_\"}}", JSON);
-        Request request = new Request.Builder()
+        Request.Builder requestBuilder = new Request.Builder()
                 .url(baseUrl + "/ofrep/v1/evaluate/flags")
                 .header("Content-Type", "application/json")
                 .header("X-API-Key", apiKey)
-                .post(body)
-                .build();
+                .post(body);
 
-        try (Response response = httpClient.newCall(request).execute()) {
+        addTelemetryHeaders(requestBuilder);
+
+        try (Response response = httpClient.newCall(requestBuilder.build()).execute()) {
             if (response.code() == 401 || response.code() == 403) {
                 state = ProviderState.ERROR;
                 throw new IOException("Invalid API key");
@@ -133,6 +182,18 @@ public class FlipswitchProvider extends EventProvider {
                 state = ProviderState.ERROR;
                 throw new IOException("Failed to connect to Flipswitch: " + response.code());
             }
+        }
+    }
+
+    /**
+     * Add telemetry headers to the request if telemetry is enabled.
+     */
+    private void addTelemetryHeaders(Request.Builder requestBuilder) {
+        if (enableTelemetry) {
+            requestBuilder.header("X-Flipswitch-SDK", getTelemetrySdkHeader());
+            requestBuilder.header("X-Flipswitch-Runtime", getTelemetryRuntimeHeader());
+            requestBuilder.header("X-Flipswitch-OS", getTelemetryOsHeader());
+            requestBuilder.header("X-Flipswitch-Features", getTelemetryFeaturesHeader());
         }
     }
 
@@ -277,14 +338,15 @@ public class FlipswitchProvider extends EventProvider {
 
             RequestBody body = RequestBody.create(mapAdapter.toJson(bodyMap), JSON);
 
-            Request request = new Request.Builder()
+            Request.Builder requestBuilder = new Request.Builder()
                     .url(url)
                     .header("Content-Type", "application/json")
                     .header("X-API-Key", apiKey)
-                    .post(body)
-                    .build();
+                    .post(body);
 
-            try (Response response = httpClient.newCall(request).execute()) {
+            addTelemetryHeaders(requestBuilder);
+
+            try (Response response = httpClient.newCall(requestBuilder.build()).execute()) {
                 if (!response.isSuccessful()) {
                     log.error("Failed to evaluate all flags: {}", response.code());
                     return results;
@@ -341,14 +403,15 @@ public class FlipswitchProvider extends EventProvider {
 
             RequestBody body = RequestBody.create(mapAdapter.toJson(bodyMap), JSON);
 
-            Request request = new Request.Builder()
+            Request.Builder requestBuilder = new Request.Builder()
                     .url(url)
                     .header("Content-Type", "application/json")
                     .header("X-API-Key", apiKey)
-                    .post(body)
-                    .build();
+                    .post(body);
 
-            try (Response response = httpClient.newCall(request).execute()) {
+            addTelemetryHeaders(requestBuilder);
+
+            try (Response response = httpClient.newCall(requestBuilder.build()).execute()) {
                 if (!response.isSuccessful()) {
                     return null;
                 }
@@ -452,6 +515,7 @@ public class FlipswitchProvider extends EventProvider {
         private final String apiKey;
         private String baseUrl = DEFAULT_BASE_URL;
         private boolean enableRealtime = true;
+        private boolean enableTelemetry = true;
         private OkHttpClient httpClient;
 
         private Builder(String apiKey) {
@@ -476,6 +540,17 @@ public class FlipswitchProvider extends EventProvider {
          */
         public Builder enableRealtime(boolean enableRealtime) {
             this.enableRealtime = enableRealtime;
+            return this;
+        }
+
+        /**
+         * Enable or disable telemetry collection.
+         * When enabled, the SDK sends usage statistics (SDK version, runtime version,
+         * OS, architecture) to help improve the service. No personal data is collected.
+         * Defaults to true.
+         */
+        public Builder enableTelemetry(boolean enableTelemetry) {
+            this.enableTelemetry = enableTelemetry;
             return this;
         }
 

@@ -1,4 +1,4 @@
-package dev.flipswitch;
+package io.flipswitch;
 
 import com.squareup.moshi.JsonAdapter;
 import com.squareup.moshi.Moshi;
