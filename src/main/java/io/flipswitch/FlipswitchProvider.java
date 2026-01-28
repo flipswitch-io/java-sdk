@@ -48,7 +48,6 @@ public class FlipswitchProvider extends EventProvider {
     private final String baseUrl;
     private final String apiKey;
     private final boolean enableRealtime;
-    private final boolean enableTelemetry;
     private final OkHttpClient httpClient;
     private final Moshi moshi;
     private final JsonAdapter<Map<String, Object>> mapAdapter;
@@ -62,7 +61,6 @@ public class FlipswitchProvider extends EventProvider {
         this.baseUrl = builder.baseUrl.replaceAll("/$", "");
         this.apiKey = builder.apiKey;
         this.enableRealtime = builder.enableRealtime;
-        this.enableTelemetry = builder.enableTelemetry;
         this.httpClient = builder.httpClient != null ? builder.httpClient : new OkHttpClient();
         this.moshi = new Moshi.Builder().build();
         Type mapType = Types.newParameterizedType(Map.class, String.class, Object.class);
@@ -72,13 +70,10 @@ public class FlipswitchProvider extends EventProvider {
         // Create underlying OFREP provider for flag evaluation
         ImmutableMap.Builder<String, ImmutableList<String>> headersBuilder = ImmutableMap.builder();
         headersBuilder.put("X-API-Key", ImmutableList.of(this.apiKey));
-
-        if (this.enableTelemetry) {
-            headersBuilder.put("X-Flipswitch-SDK", ImmutableList.of(getTelemetrySdkHeader()));
-            headersBuilder.put("X-Flipswitch-Runtime", ImmutableList.of(getTelemetryRuntimeHeader()));
-            headersBuilder.put("X-Flipswitch-OS", ImmutableList.of(getTelemetryOsHeader()));
-            headersBuilder.put("X-Flipswitch-Features", ImmutableList.of(getTelemetryFeaturesHeader()));
-        }
+        headersBuilder.put("X-Flipswitch-SDK", ImmutableList.of(getTelemetrySdkHeader()));
+        headersBuilder.put("X-Flipswitch-Runtime", ImmutableList.of(getTelemetryRuntimeHeader()));
+        headersBuilder.put("X-Flipswitch-OS", ImmutableList.of(getTelemetryOsHeader()));
+        headersBuilder.put("X-Flipswitch-Features", ImmutableList.of(getTelemetryFeaturesHeader()));
 
         OfrepProviderOptions ofrepOptions = OfrepProviderOptions.builder()
                 .baseUrl(this.baseUrl + "/ofrep/v1")
@@ -186,15 +181,13 @@ public class FlipswitchProvider extends EventProvider {
     }
 
     /**
-     * Add telemetry headers to the request if telemetry is enabled.
+     * Add telemetry headers to the request.
      */
     private void addTelemetryHeaders(Request.Builder requestBuilder) {
-        if (enableTelemetry) {
-            requestBuilder.header("X-Flipswitch-SDK", getTelemetrySdkHeader());
-            requestBuilder.header("X-Flipswitch-Runtime", getTelemetryRuntimeHeader());
-            requestBuilder.header("X-Flipswitch-OS", getTelemetryOsHeader());
-            requestBuilder.header("X-Flipswitch-Features", getTelemetryFeaturesHeader());
-        }
+        requestBuilder.header("X-Flipswitch-SDK", getTelemetrySdkHeader());
+        requestBuilder.header("X-Flipswitch-Runtime", getTelemetryRuntimeHeader());
+        requestBuilder.header("X-Flipswitch-OS", getTelemetryOsHeader());
+        requestBuilder.header("X-Flipswitch-Features", getTelemetryFeaturesHeader());
     }
 
     @Override
@@ -235,9 +228,6 @@ public class FlipswitchProvider extends EventProvider {
      * Get telemetry headers as a map.
      */
     private Map<String, String> getTelemetryHeadersMap() {
-        if (!enableTelemetry) {
-            return null;
-        }
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("X-Flipswitch-SDK", getTelemetrySdkHeader());
         headers.put("X-Flipswitch-Runtime", getTelemetryRuntimeHeader());
@@ -532,7 +522,6 @@ public class FlipswitchProvider extends EventProvider {
         private final String apiKey;
         private String baseUrl = DEFAULT_BASE_URL;
         private boolean enableRealtime = true;
-        private boolean enableTelemetry = true;
         private OkHttpClient httpClient;
 
         private Builder(String apiKey) {
@@ -557,17 +546,6 @@ public class FlipswitchProvider extends EventProvider {
          */
         public Builder enableRealtime(boolean enableRealtime) {
             this.enableRealtime = enableRealtime;
-            return this;
-        }
-
-        /**
-         * Enable or disable telemetry collection.
-         * When enabled, the SDK sends usage statistics (SDK version, runtime version,
-         * OS, architecture) to help improve the service. No personal data is collected.
-         * Defaults to true.
-         */
-        public Builder enableTelemetry(boolean enableTelemetry) {
-            this.enableTelemetry = enableTelemetry;
             return this;
         }
 
