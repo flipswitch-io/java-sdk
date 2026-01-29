@@ -76,7 +76,7 @@ public class FlipswitchProvider extends EventProvider {
         headersBuilder.put("X-Flipswitch-Features", ImmutableList.of(getTelemetryFeaturesHeader()));
 
         OfrepProviderOptions ofrepOptions = OfrepProviderOptions.builder()
-                .baseUrl(this.baseUrl + "/ofrep/v1")
+                .baseUrl(this.baseUrl)
                 .headers(headersBuilder.build())
                 .build();
         this.ofrepProvider = OfrepProvider.constructProvider(ofrepOptions);
