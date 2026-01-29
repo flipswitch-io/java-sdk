@@ -334,4 +334,29 @@ class FlipswitchProviderTest {
         // If we get here without exception, the custom baseUrl was used
         assertEquals(ProviderState.READY, provider.getState());
     }
+
+    // ========================================
+    // URL Path Tests
+    // ========================================
+
+    @Test
+    void ofrepRequests_shouldUseCorrectPath() throws Exception {
+        dispatcher.setFlagResponse("test-flag", () -> new MockResponse.Builder()
+                .code(200)
+                .addHeader("Content-Type", "application/json")
+                .body("{\"key\":\"test-flag\",\"value\":true}")
+                .build());
+
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        // Trigger a single flag evaluation via the direct HTTP method
+        provider.evaluateFlag("test-flag", new ImmutableContext());
+
+        // Skip the init request, get the flag evaluation request
+        mockServer.takeRequest(); // init bulk request
+        RecordedRequest flagRequest = mockServer.takeRequest();
+
+        assertEquals("/ofrep/v1/evaluate/flags/test-flag", flagRequest.getUrl().encodedPath());
+    }
 }
