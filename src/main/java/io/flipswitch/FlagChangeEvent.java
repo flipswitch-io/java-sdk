@@ -15,7 +15,7 @@ public record FlagChangeEvent(
      * Get the timestamp as an Instant.
      */
     public Instant getTimestampAsInstant() {
-        return timestamp != null ? Instant.parse(timestamp) : null;
+        return Instant.parse(timestamp);
     }
 
     @Override

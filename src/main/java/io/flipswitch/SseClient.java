@@ -168,14 +168,16 @@ public class SseClient {
                 ConfigUpdatedEvent configEvent = configEventAdapter.fromJson(data);
                 log.debug("Config updated event: {}", configEvent);
 
-                // Log warning for api-key-rotated
-                if (configEvent != null && "api-key-rotated".equals(configEvent.reason())) {
-                    log.warn("API key has been rotated. You may need to update your API key configuration.");
-                }
+                if (configEvent != null) {
+                    // Log warning for api-key-rotated
+                    if ("api-key-rotated".equals(configEvent.reason())) {
+                        log.warn("API key has been rotated. You may need to update your API key configuration.");
+                    }
 
-                // Create a FlagChangeEvent with null flagKey to trigger full refresh
-                FlagChangeEvent event = new FlagChangeEvent(null, configEvent != null ? configEvent.timestamp() : null);
-                onFlagChange.accept(event);
+                    // Create a FlagChangeEvent with null flagKey to trigger full refresh
+                    FlagChangeEvent event = new FlagChangeEvent(null, configEvent.timestamp());
+                    onFlagChange.accept(event);
+                }
             } else if ("flag-change".equals(type)) {
                 // Legacy event format for backward compatibility
                 FlagChangeEvent event = eventAdapter.fromJson(data);
