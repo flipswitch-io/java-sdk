@@ -5,10 +5,11 @@ import com.squareup.moshi.Json;
 import java.time.Instant;
 
 /**
- * Represents a flag change event received via SSE.
+ * Represents a configuration update event received via SSE.
+ * This event indicates that configuration has changed that may affect multiple flags.
  */
-public record FlagChangeEvent(
-    @Json(name = "flagKey") String flagKey,
+public record ConfigUpdatedEvent(
+    @Json(name = "reason") String reason,
     @Json(name = "timestamp") String timestamp
 ) {
     /**
@@ -20,8 +21,8 @@ public record FlagChangeEvent(
 
     @Override
     public String toString() {
-        return "FlagChangeEvent{" +
-                "flagKey='" + flagKey + '\'' +
+        return "ConfigUpdatedEvent{" +
+                "reason='" + reason + '\'' +
                 ", timestamp='" + timestamp + '\'' +
                 '}';
     }
