@@ -37,6 +37,7 @@ public class SseClient {
     private final Consumer<ConnectionStatus> onStatusChange;
     private final OkHttpClient httpClient;
     private final JsonAdapter<FlagChangeEvent> eventAdapter;
+    private final JsonAdapter<ConfigUpdatedEvent> configEventAdapter;
     private final ScheduledExecutorService scheduler;
 
     private EventSource eventSource;
@@ -77,6 +78,7 @@ public class SseClient {
                 .build();
         Moshi moshi = new Moshi.Builder().build();
         this.eventAdapter = moshi.adapter(FlagChangeEvent.class);
+        this.configEventAdapter = moshi.adapter(ConfigUpdatedEvent.class);
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "flipswitch-sse-reconnect");
             t.setDaemon(true);
@@ -153,16 +155,37 @@ public class SseClient {
             return;
         }
 
-        if ("flag-change".equals(type)) {
-            try {
+        try {
+            if ("flag-updated".equals(type)) {
+                // Single flag was modified
+                FlagChangeEvent event = eventAdapter.fromJson(data);
+                log.debug("Flag updated event: {}", event);
+                if (event != null) {
+                    onFlagChange.accept(event);
+                }
+            } else if ("config-updated".equals(type)) {
+                // Configuration changed, need to refresh all flags
+                ConfigUpdatedEvent configEvent = configEventAdapter.fromJson(data);
+                log.debug("Config updated event: {}", configEvent);
+
+                // Log warning for api-key-rotated
+                if (configEvent != null && "api-key-rotated".equals(configEvent.reason())) {
+                    log.warn("API key has been rotated. You may need to update your API key configuration.");
+                }
+
+                // Create a FlagChangeEvent with null flagKey to trigger full refresh
+                FlagChangeEvent event = new FlagChangeEvent(null, configEvent != null ? configEvent.timestamp() : null);
+                onFlagChange.accept(event);
+            } else if ("flag-change".equals(type)) {
+                // Legacy event format for backward compatibility
                 FlagChangeEvent event = eventAdapter.fromJson(data);
                 log.debug("Flag change event: {}", event);
                 if (event != null) {
                     onFlagChange.accept(event);
                 }
-            } catch (Exception e) {
-                log.error("Failed to parse flag-change event: {}", e.getMessage());
             }
+        } catch (Exception e) {
+            log.error("Failed to parse {} event: {}", type, e.getMessage());
         }
     }
 
