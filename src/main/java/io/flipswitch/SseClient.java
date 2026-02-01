@@ -140,7 +140,7 @@ public class SseClient {
             @Override
             public void onFailure(EventSource eventSource, Throwable t, Response response) {
                 if (!closed.get()) {
-                    log.error("SSE connection error: {}", t != null ? t.getMessage() : "unknown");
+                    log.warn("SSE connection error: {}", t != null ? t.getMessage() : "unknown");
                     updateStatus(ConnectionStatus.ERROR);
                     scheduleReconnect();
                 }
