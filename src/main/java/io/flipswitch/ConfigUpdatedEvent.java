@@ -9,7 +9,6 @@ import java.time.Instant;
  * This event indicates that configuration has changed that may affect multiple flags.
  */
 public record ConfigUpdatedEvent(
-    @Json(name = "reason") String reason,
     @Json(name = "timestamp") String timestamp
 ) {
     /**
@@ -22,8 +21,7 @@ public record ConfigUpdatedEvent(
     @Override
     public String toString() {
         return "ConfigUpdatedEvent{" +
-                "reason='" + reason + '\'' +
-                ", timestamp='" + timestamp + '\'' +
+                "timestamp='" + timestamp + '\'' +
                 '}';
     }
 }

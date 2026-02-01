@@ -43,7 +43,9 @@ public class FlipswitchProvider extends EventProvider {
     private static final Logger log = LoggerFactory.getLogger(FlipswitchProvider.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final String DEFAULT_BASE_URL = "https://api.flipswitch.io";
-    private static final String SDK_VERSION = "0.1.0";
+    private static final String SDK_VERSION = "0.1.1";
+    private static final long DEFAULT_POLLING_INTERVAL_MS = 30000;
+    private static final int DEFAULT_MAX_SSE_RETRIES = 5;
 
     private final String baseUrl;
     private final String apiKey;
@@ -53,6 +55,15 @@ public class FlipswitchProvider extends EventProvider {
     private final JsonAdapter<Map<String, Object>> mapAdapter;
     private final OfrepProvider ofrepProvider;
     private final CopyOnWriteArrayList<Consumer<FlagChangeEvent>> flagChangeListeners;
+
+    // Polling fallback configuration
+    private final boolean enablePollingFallback;
+    private final long pollingIntervalMs;
+    private final int maxSseRetries;
+    private final ScheduledExecutorService pollingScheduler;
+    private volatile int sseRetryCount = 0;
+    private volatile boolean pollingActive = false;
+    private java.util.concurrent.ScheduledFuture<?> pollingFuture;
 
     private SseClient sseClient;
     private volatile ProviderState state = ProviderState.NOT_READY;
@@ -66,6 +77,16 @@ public class FlipswitchProvider extends EventProvider {
         Type mapType = Types.newParameterizedType(Map.class, String.class, Object.class);
         this.mapAdapter = moshi.adapter(mapType);
         this.flagChangeListeners = new CopyOnWriteArrayList<>();
+
+        // Polling fallback configuration
+        this.enablePollingFallback = builder.enablePollingFallback;
+        this.pollingIntervalMs = builder.pollingIntervalMs;
+        this.maxSseRetries = builder.maxSseRetries;
+        this.pollingScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "flipswitch-polling");
+            t.setDaemon(true);
+            return t;
+        });
 
         // Create underlying OFREP provider for flag evaluation
         ImmutableMap.Builder<String, ImmutableList<String>> headersBuilder = ImmutableMap.builder();
@@ -192,6 +213,10 @@ public class FlipswitchProvider extends EventProvider {
 
     @Override
     public void shutdown() {
+        // Stop polling if active
+        stopPolling();
+        pollingScheduler.shutdownNow();
+
         if (sseClient != null) {
             sseClient.close();
             sseClient = null;
@@ -199,6 +224,56 @@ public class FlipswitchProvider extends EventProvider {
         ofrepProvider.shutdown();
         state = ProviderState.NOT_READY;
         log.info("Flipswitch provider shut down");
+    }
+
+    /**
+     * Start polling fallback when SSE fails.
+     */
+    private void startPollingFallback() {
+        if (pollingActive || !enablePollingFallback) {
+            return;
+        }
+
+        log.info("Starting polling fallback (interval: {}ms)", pollingIntervalMs);
+        pollingActive = true;
+        pollingFuture = pollingScheduler.scheduleAtFixedRate(
+                this::pollFlags,
+                pollingIntervalMs,
+                pollingIntervalMs,
+                java.util.concurrent.TimeUnit.MILLISECONDS
+        );
+    }
+
+    /**
+     * Poll for flag updates.
+     */
+    private void pollFlags() {
+        // The OFREP Java provider doesn't expose cache invalidation,
+        // but emitting configuration changed will trigger re-evaluation
+        log.debug("Polling: checking for flag updates");
+        emitProviderConfigurationChanged(ProviderEventDetails.builder().build());
+    }
+
+    /**
+     * Stop polling fallback.
+     */
+    private void stopPolling() {
+        if (!pollingActive) {
+            return;
+        }
+
+        pollingActive = false;
+        if (pollingFuture != null) {
+            pollingFuture.cancel(false);
+            pollingFuture = null;
+        }
+    }
+
+    /**
+     * Check if polling fallback is active.
+     */
+    public boolean isPollingActive() {
+        return pollingActive;
     }
 
     /**
@@ -213,11 +288,30 @@ public class FlipswitchProvider extends EventProvider {
                 this::handleFlagChange,
                 status -> {
                     if (status == SseClient.ConnectionStatus.ERROR) {
+                        sseRetryCount++;
+                        log.warn("SSE connection error (retry {}), provider is stale", sseRetryCount);
+
+                        // Check if we should fall back to polling
+                        if (sseRetryCount >= maxSseRetries && enablePollingFallback) {
+                            log.warn("SSE failed after {} retries - falling back to polling", sseRetryCount);
+                            startPollingFallback();
+                        }
+
                         state = ProviderState.STALE;
                         emitProviderStale(ProviderEventDetails.builder().build());
-                    } else if (status == SseClient.ConnectionStatus.CONNECTED && state == ProviderState.STALE) {
-                        state = ProviderState.READY;
-                        emitProviderReady(ProviderEventDetails.builder().build());
+                    } else if (status == SseClient.ConnectionStatus.CONNECTED) {
+                        // SSE connected - reset retry count and stop polling
+                        sseRetryCount = 0;
+
+                        if (pollingActive) {
+                            log.info("SSE reconnected - stopping polling fallback");
+                            stopPolling();
+                        }
+
+                        if (state == ProviderState.STALE) {
+                            state = ProviderState.READY;
+                            emitProviderReady(ProviderEventDetails.builder().build());
+                        }
                     }
                 }
         );
@@ -523,6 +617,9 @@ public class FlipswitchProvider extends EventProvider {
         private String baseUrl = DEFAULT_BASE_URL;
         private boolean enableRealtime = true;
         private OkHttpClient httpClient;
+        private boolean enablePollingFallback = true;
+        private long pollingIntervalMs = DEFAULT_POLLING_INTERVAL_MS;
+        private int maxSseRetries = DEFAULT_MAX_SSE_RETRIES;
 
         private Builder(String apiKey) {
             if (apiKey == null || apiKey.isEmpty()) {
@@ -554,6 +651,33 @@ public class FlipswitchProvider extends EventProvider {
          */
         public Builder httpClient(OkHttpClient httpClient) {
             this.httpClient = httpClient;
+            return this;
+        }
+
+        /**
+         * Enable or disable polling fallback when SSE fails.
+         * Defaults to true.
+         */
+        public Builder enablePollingFallback(boolean enablePollingFallback) {
+            this.enablePollingFallback = enablePollingFallback;
+            return this;
+        }
+
+        /**
+         * Set the polling interval in milliseconds for fallback mode.
+         * Defaults to 30000 (30 seconds).
+         */
+        public Builder pollingIntervalMs(long pollingIntervalMs) {
+            this.pollingIntervalMs = pollingIntervalMs;
+            return this;
+        }
+
+        /**
+         * Set the maximum SSE retry attempts before falling back to polling.
+         * Defaults to 5.
+         */
+        public Builder maxSseRetries(int maxSseRetries) {
+            this.maxSseRetries = maxSseRetries;
             return this;
         }
 
