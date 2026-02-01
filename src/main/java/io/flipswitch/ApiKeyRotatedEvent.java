@@ -6,8 +6,8 @@ import java.time.Instant;
 
 /**
  * Represents an API key rotation event received via SSE.
- * This event indicates that the API key has been rotated and provides
- * information about when the current key will expire.
+ * This event indicates that the API key has been rotated (validUntil is set)
+ * or that a rotation was aborted (validUntil is null).
  */
 public record ApiKeyRotatedEvent(
     @Json(name = "validUntil") String validUntil,
@@ -15,9 +15,10 @@ public record ApiKeyRotatedEvent(
 ) {
     /**
      * Get the validUntil as an Instant.
+     * @return the expiry instant, or null if rotation was aborted
      */
     public Instant getValidUntilAsInstant() {
-        return Instant.parse(validUntil);
+        return validUntil != null && !validUntil.isEmpty() ? Instant.parse(validUntil) : null;
     }
 
     /**

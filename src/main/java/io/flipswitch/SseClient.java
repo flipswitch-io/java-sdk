@@ -176,12 +176,16 @@ public class SseClient {
                     onFlagChange.accept(event);
                 }
             } else if ("api-key-rotated".equals(type)) {
-                // API key was rotated - warning only, no cache invalidation
+                // API key was rotated or rotation was aborted
                 ApiKeyRotatedEvent rotatedEvent = apiKeyRotatedAdapter.fromJson(data);
                 if (rotatedEvent != null) {
-                    log.warn("API key was rotated. Current key valid until: {}", rotatedEvent.validUntil());
+                    if (rotatedEvent.validUntil() == null || rotatedEvent.validUntil().isEmpty()) {
+                        log.info("API key rotation was aborted");
+                    } else {
+                        log.warn("API key was rotated. Current key valid until: {}", rotatedEvent.validUntil());
+                    }
                 }
-                // No cache invalidation - this is just a warning
+                // No cache invalidation - this is just informational
             }
         } catch (Exception e) {
             log.error("Failed to parse {} event: {}", type, e.getMessage());
