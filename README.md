@@ -23,19 +23,24 @@ This SDK provides an OpenFeature-compatible provider that wraps OFREP flag evalu
 
 ### Maven
 
+Add to your `pom.xml`:
+
 ```xml
 <dependency>
     <groupId>io.flipswitch</groupId>
     <artifactId>flipswitch-sdk</artifactId>
-    <version>0.1.1</version>
 </dependency>
 ```
+
+Check [Maven Central](https://central.sonatype.com/artifact/io.flipswitch/flipswitch-sdk) for the latest version.
 
 ### Gradle
 
 ```groovy
-implementation 'io.flipswitch:flipswitch-sdk:0.1.1'
+implementation 'io.flipswitch:flipswitch-sdk'
 ```
+
+Check [Maven Central](https://central.sonatype.com/artifact/io.flipswitch/flipswitch-sdk) for the latest version.
 
 ## Quick Start
 

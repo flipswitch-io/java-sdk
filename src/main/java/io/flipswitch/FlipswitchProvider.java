@@ -47,9 +47,14 @@ public class FlipswitchProvider extends EventProvider {
     private static final Logger log = LoggerFactory.getLogger(FlipswitchProvider.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final String DEFAULT_BASE_URL = "https://api.flipswitch.io";
-    private static final String SDK_VERSION = "0.1.1";
+    private static final String SDK_VERSION = getVersionFromManifest();
     private static final long DEFAULT_POLLING_INTERVAL_MS = 30000;
     private static final int DEFAULT_MAX_SSE_RETRIES = 5;
+
+    private static String getVersionFromManifest() {
+        String version = FlipswitchProvider.class.getPackage().getImplementationVersion();
+        return version != null ? version : "dev";
+    }
 
     private final String baseUrl;
     private final String apiKey;
