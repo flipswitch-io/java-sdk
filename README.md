@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/flipswitch-io/java-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/flipswitch-io/java-sdk/actions/workflows/ci.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/io.flipswitch/flipswitch-sdk.svg)](https://search.maven.org/artifact/io.flipswitch/flipswitch-sdk)
+[![codecov](https://codecov.io/gh/flipswitch-io/java-sdk/branch/main/graph/badge.svg)](https://codecov.io/gh/flipswitch-io/java-sdk)
 
 Flipswitch SDK for Java with real-time SSE support for OpenFeature.
 

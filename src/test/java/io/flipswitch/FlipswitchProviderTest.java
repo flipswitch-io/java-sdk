@@ -15,7 +15,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -61,6 +64,38 @@ class FlipswitchProviderTest {
                 .build();
     }
 
+    private FlipswitchProvider createRealtimeProvider() {
+        return FlipswitchProvider.builder("test-api-key")
+                .baseUrl(mockServer.url("/").toString())
+                .enableRealtime(true)
+                .build();
+    }
+
+    private FlipswitchProvider createRealtimeProvider(int maxSseRetries) {
+        return FlipswitchProvider.builder("test-api-key")
+                .baseUrl(mockServer.url("/").toString())
+                .enableRealtime(true)
+                .maxSseRetries(maxSseRetries)
+                .pollingIntervalMs(100)
+                .build();
+    }
+
+    private static String sseFrame(String eventType, String data) {
+        return "event: " + eventType + "\n" +
+               "data: " + data + "\n" +
+               "\n";
+    }
+
+    private static MockResponse sseResponse(String body) {
+        return new MockResponse.Builder()
+                .code(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setHeader("Cache-Control", "no-cache")
+                .setHeader("Connection", "keep-alive")
+                .body(body)
+                .build();
+    }
+
     /**
      * Test dispatcher that handles OFREP endpoints dynamically.
      */
@@ -71,6 +106,7 @@ class FlipswitchProviderTest {
                 .addHeader("Content-Type", "application/json")
                 .body("{\"flags\":[]}")
                 .build();
+        private volatile Supplier<MockResponse> sseResponse = null;
         private boolean failInit = false;
         private int initFailCode = 401;
 
@@ -80,6 +116,10 @@ class FlipswitchProviderTest {
 
         void setBulkResponse(Supplier<MockResponse> responseSupplier) {
             this.bulkResponse = responseSupplier;
+        }
+
+        void setSseResponse(Supplier<MockResponse> responseSupplier) {
+            this.sseResponse = responseSupplier;
         }
 
         void setInitFailure(int statusCode) {
@@ -116,6 +156,9 @@ class FlipswitchProviderTest {
 
             // SSE endpoint
             if (path != null && path.contains("/events")) {
+                if (sseResponse != null) {
+                    return sseResponse.get();
+                }
                 return new MockResponse.Builder().code(200).build();
             }
 
@@ -703,5 +746,375 @@ class FlipswitchProviderTest {
                 .build();
 
         assertEquals("flipswitch", provider.getMetadata().getName());
+    }
+
+    // ========================================
+    // SSE Integration Tests (enableRealtime=true)
+    // ========================================
+
+    @Test
+    void initialization_withRealtimeEnabled_shouldStartSse() throws Exception {
+        // Track SSE requests to verify the connection was attempted
+        AtomicInteger sseHitCount = new AtomicInteger(0);
+        dispatcher.setSseResponse(() -> {
+            sseHitCount.incrementAndGet();
+            return sseResponse(sseFrame("heartbeat", "{}"));
+        });
+
+        provider = createRealtimeProvider();
+        provider.initialize(new ImmutableContext());
+
+        assertEquals(ProviderState.READY, provider.getState());
+
+        // Wait for the SSE endpoint to be hit (proves SSE was started)
+        awaitCondition(() -> sseHitCount.get() > 0, 5000);
+        assertTrue(sseHitCount.get() > 0, "SSE endpoint should have been called");
+
+        // getSseStatus may be CONNECTED or DISCONNECTED depending on timing,
+        // but it should not be the initial value before any connection was attempted
+        // The key assertion is that SSE was started (sseHitCount > 0)
+    }
+
+    @Test
+    void sseStatusCallback_onError_shouldSetStaleState() throws Exception {
+        // Serve a valid SSE response first, then errors
+        AtomicInteger sseRequestCount = new AtomicInteger(0);
+        dispatcher.setSseResponse(() -> {
+            int count = sseRequestCount.incrementAndGet();
+            if (count == 1) {
+                // First request: connect successfully then close (empty body triggers onClosed -> reconnect)
+                return sseResponse("");
+            }
+            // Subsequent requests: return 500 error
+            return new MockResponse.Builder().code(500).body("error").build();
+        });
+
+        provider = createRealtimeProvider();
+        provider.initialize(new ImmutableContext());
+
+        // Wait for STALE state (SSE error after reconnect failures)
+        awaitCondition(() -> provider.getState() == ProviderState.STALE, 10000);
+        assertEquals(ProviderState.STALE, provider.getState());
+    }
+
+    @Test
+    void sseStatusCallback_onReconnect_shouldRestoreReadyFromStale() throws Exception {
+        AtomicInteger sseRequestCount = new AtomicInteger(0);
+        dispatcher.setSseResponse(() -> {
+            int count = sseRequestCount.incrementAndGet();
+            if (count == 1) {
+                // First: connect then close immediately
+                return sseResponse("");
+            } else if (count == 2) {
+                // Second: error to trigger STALE
+                return new MockResponse.Builder().code(500).body("error").build();
+            }
+            // Third+: successful reconnect
+            return sseResponse(sseFrame("heartbeat", "{}"));
+        });
+
+        provider = createRealtimeProvider();
+        provider.initialize(new ImmutableContext());
+
+        // Wait for STALE
+        awaitCondition(() -> provider.getState() == ProviderState.STALE, 10000);
+
+        // Wait for recovery to READY
+        awaitCondition(() -> provider.getState() == ProviderState.READY, 10000);
+        assertEquals(ProviderState.READY, provider.getState());
+    }
+
+    @Test
+    void pollingFallback_shouldActivateAfterMaxSseRetries() throws Exception {
+        // Always fail SSE requests
+        dispatcher.setSseResponse(() -> new MockResponse.Builder().code(500).body("error").build());
+
+        provider = createRealtimeProvider(2);
+        provider.initialize(new ImmutableContext());
+
+        // Wait for polling to become active (after 2 SSE retries)
+        awaitCondition(() -> provider.isPollingActive(), 15000);
+        assertTrue(provider.isPollingActive());
+    }
+
+    @Test
+    void pollingFallback_shouldStopWhenSseReconnects() throws Exception {
+        AtomicInteger sseRequestCount = new AtomicInteger(0);
+        dispatcher.setSseResponse(() -> {
+            int count = sseRequestCount.incrementAndGet();
+            if (count <= 3) {
+                // First 3 requests: fail to trigger polling fallback
+                return new MockResponse.Builder().code(500).body("error").build();
+            }
+            // After polling is active: succeed to stop polling
+            return sseResponse(sseFrame("heartbeat", "{}"));
+        });
+
+        provider = createRealtimeProvider(2);
+        provider.initialize(new ImmutableContext());
+
+        // Wait for polling to activate
+        awaitCondition(() -> provider.isPollingActive(), 15000);
+        assertTrue(provider.isPollingActive());
+
+        // Wait for SSE to reconnect and polling to stop
+        awaitCondition(() -> !provider.isPollingActive(), 15000);
+        assertFalse(provider.isPollingActive());
+    }
+
+    @Test
+    void handleFlagChange_shouldNotifyListeners() throws Exception {
+        String flagJson = "{\"flagKey\":\"test-flag\",\"timestamp\":\"2024-01-01T00:00:00Z\"}";
+        dispatcher.setSseResponse(() -> sseResponse(sseFrame("flag-updated", flagJson)));
+
+        CountDownLatch eventLatch = new CountDownLatch(1);
+        AtomicReference<FlagChangeEvent> receivedEvent = new AtomicReference<>();
+
+        provider = createRealtimeProvider();
+        provider.addFlagChangeListener(event -> {
+            receivedEvent.set(event);
+            eventLatch.countDown();
+        });
+        provider.initialize(new ImmutableContext());
+
+        assertTrue(eventLatch.await(5, TimeUnit.SECONDS), "Should receive flag change event");
+        assertNotNull(receivedEvent.get());
+        assertEquals("test-flag", receivedEvent.get().flagKey());
+    }
+
+    @Test
+    void handleFlagChange_listenerException_shouldNotPropagate() throws Exception {
+        String flagJson = "{\"flagKey\":\"test-flag\",\"timestamp\":\"2024-01-01T00:00:00Z\"}";
+        dispatcher.setSseResponse(() -> sseResponse(sseFrame("flag-updated", flagJson)));
+
+        CountDownLatch eventLatch = new CountDownLatch(1);
+
+        provider = createRealtimeProvider();
+        // First listener throws
+        provider.addFlagChangeListener(event -> {
+            throw new RuntimeException("Listener error");
+        });
+        // Second listener should still be called
+        provider.addFlagChangeListener(event -> eventLatch.countDown());
+        provider.initialize(new ImmutableContext());
+
+        assertTrue(eventLatch.await(5, TimeUnit.SECONDS),
+                "Second listener should be called despite first listener throwing");
+    }
+
+    @Test
+    void reconnectSse_shouldCloseAndRestart() throws Exception {
+        AtomicInteger sseHitCount = new AtomicInteger(0);
+        dispatcher.setSseResponse(() -> {
+            sseHitCount.incrementAndGet();
+            return sseResponse(sseFrame("heartbeat", "{}"));
+        });
+
+        provider = createRealtimeProvider();
+        provider.initialize(new ImmutableContext());
+
+        // Wait for initial SSE connection
+        awaitCondition(() -> sseHitCount.get() > 0, 5000);
+        int countBeforeReconnect = sseHitCount.get();
+
+        // Force reconnect
+        provider.reconnectSse();
+
+        // Wait for the reconnected SSE to hit the endpoint again
+        awaitCondition(() -> sseHitCount.get() > countBeforeReconnect, 5000);
+        assertTrue(sseHitCount.get() > countBeforeReconnect,
+                "SSE endpoint should have been called again after reconnect");
+    }
+
+    @Test
+    void reconnectSse_whenRealtimeDisabled_shouldBeNoOp() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        // Should not throw
+        provider.reconnectSse();
+
+        assertEquals(SseClient.ConnectionStatus.DISCONNECTED, provider.getSseStatus());
+    }
+
+    @Test
+    void shutdown_withActiveSseClient_shouldCloseIt() throws Exception {
+        AtomicInteger sseHitCount = new AtomicInteger(0);
+        dispatcher.setSseResponse(() -> {
+            sseHitCount.incrementAndGet();
+            return sseResponse(sseFrame("heartbeat", "{}"));
+        });
+
+        provider = createRealtimeProvider();
+        provider.initialize(new ImmutableContext());
+
+        // Wait for SSE to be established
+        awaitCondition(() -> sseHitCount.get() > 0, 5000);
+
+        provider.shutdown();
+
+        assertEquals(ProviderState.NOT_READY, provider.getState());
+        assertEquals(SseClient.ConnectionStatus.DISCONNECTED, provider.getSseStatus());
+    }
+
+    // ========================================
+    // Delegation Tests
+    // ========================================
+
+    @Test
+    void delegation_getBooleanEvaluation() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        // The delegation call goes through the OFREP provider which will make
+        // its own HTTP call. Since we can't easily mock it at this level,
+        // we verify no exception is thrown and a result is returned.
+        var result = provider.getBooleanEvaluation("test-flag", false, new ImmutableContext());
+        assertNotNull(result);
+        // Default value is returned when flag is not found
+        assertEquals(false, result.getValue());
+    }
+
+    @Test
+    void delegation_getStringEvaluation() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        var result = provider.getStringEvaluation("test-flag", "default", new ImmutableContext());
+        assertNotNull(result);
+        assertEquals("default", result.getValue());
+    }
+
+    @Test
+    void delegation_getIntegerEvaluation() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        var result = provider.getIntegerEvaluation("test-flag", 0, new ImmutableContext());
+        assertNotNull(result);
+        assertEquals(0, result.getValue());
+    }
+
+    @Test
+    void delegation_getDoubleEvaluation() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        var result = provider.getDoubleEvaluation("test-flag", 0.0, new ImmutableContext());
+        assertNotNull(result);
+        assertEquals(0.0, result.getValue());
+    }
+
+    @Test
+    void delegation_getObjectEvaluation() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        Value defaultVal = new Value("default");
+        var result = provider.getObjectEvaluation("test-flag", defaultVal, new ImmutableContext());
+        assertNotNull(result);
+    }
+
+    // ========================================
+    // Flag Metadata Tests
+    // ========================================
+
+    @Test
+    void evaluateAllFlags_withFlagMetadata_shouldExtractFlagType() throws Exception {
+        dispatcher.setBulkResponse(() -> new MockResponse.Builder()
+                .code(200)
+                .addHeader("Content-Type", "application/json")
+                .body("{\"flags\":[" +
+                        "{\"key\":\"typed-flag\",\"value\":true,\"reason\":\"DEFAULT\"," +
+                        "\"metadata\":{\"flagType\":\"boolean\"}}" +
+                        "]}")
+                .build());
+
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        var flags = provider.evaluateAllFlags(new ImmutableContext("user-1"));
+
+        assertEquals(1, flags.size());
+        assertEquals("boolean", flags.get(0).getValueType());
+    }
+
+    // ========================================
+    // Context Transformation - Extended
+    // ========================================
+
+    @Test
+    void contextTransformation_withListAndStructureValues() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        dispatcher.setFlagResponse("test-ctx", () -> new MockResponse.Builder()
+                .code(200)
+                .addHeader("Content-Type", "application/json")
+                .body("{\"key\":\"test-ctx\",\"value\":true}")
+                .build());
+
+        MutableContext ctx = new MutableContext("user-123");
+        ctx.add("tags", List.of(new Value("a"), new Value("b")));
+        MutableContext profile = new MutableContext();
+        profile.add("name", "test");
+        ctx.add("profile", profile);
+
+        provider.evaluateFlag("test-ctx", ctx);
+
+        mockServer.takeRequest(); // init
+        RecordedRequest request = mockServer.takeRequest();
+        String body = request.getBody().utf8();
+
+        assertTrue(body.contains("\"tags\""));
+        assertTrue(body.contains("\"profile\""));
+    }
+
+    // ========================================
+    // Telemetry Features Header with Realtime
+    // ========================================
+
+    @Test
+    void telemetryHeaders_featuresHeader_withRealtime() throws Exception {
+        dispatcher.setSseResponse(() -> sseResponse(sseFrame("heartbeat", "{}")));
+
+        provider = createRealtimeProvider();
+        provider.initialize(new ImmutableContext());
+
+        dispatcher.setBulkResponse(() -> new MockResponse.Builder()
+                .code(200)
+                .addHeader("Content-Type", "application/json")
+                .body("{\"flags\":[]}")
+                .build());
+
+        provider.evaluateAllFlags(new ImmutableContext("user-1"));
+
+        // Find the bulk eval request (skip init and SSE requests)
+        RecordedRequest request;
+        String features = null;
+        for (int i = 0; i < 10; i++) {
+            request = mockServer.takeRequest(2, TimeUnit.SECONDS);
+            if (request != null && request.getUrl() != null
+                    && request.getUrl().encodedPath().equals("/ofrep/v1/evaluate/flags")) {
+                features = request.getHeaders().get("X-Flipswitch-Features");
+                // Skip the init request, get the post-init one
+                if (features != null && features.equals("sse=true")) {
+                    break;
+                }
+            }
+        }
+
+        assertEquals("sse=true", features);
+    }
+
+    // ========================================
+    // Helper Methods
+    // ========================================
+
+    private void awaitCondition(java.util.function.BooleanSupplier condition, long timeoutMs) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50);
+        }
     }
 }
