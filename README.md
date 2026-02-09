@@ -1,4 +1,4 @@
-# Flipswitch Java SDK
+# Flipswitch Java SDK 
 
 [![CI](https://github.com/flipswitch-io/java-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/flipswitch-io/java-sdk/actions/workflows/ci.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/io.flipswitch/flipswitch-sdk.svg)](https://search.maven.org/artifact/io.flipswitch/flipswitch-sdk)
