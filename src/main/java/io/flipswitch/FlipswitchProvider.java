@@ -591,7 +591,7 @@ public class FlipswitchProvider extends EventProvider {
     /**
      * Convert an OpenFeature Value to a plain Java object.
      */
-    private Object valueToObject(Value value) {
+    Object valueToObject(Value value) {
         if (value.isBoolean()) {
             return value.asBoolean();
         } else if (value.isString()) {
