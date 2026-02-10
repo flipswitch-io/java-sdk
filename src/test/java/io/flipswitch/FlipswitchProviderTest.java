@@ -2,6 +2,7 @@ package io.flipswitch;
 
 import dev.openfeature.sdk.ImmutableContext;
 import dev.openfeature.sdk.MutableContext;
+import dev.openfeature.sdk.MutableStructure;
 import dev.openfeature.sdk.ProviderState;
 import dev.openfeature.sdk.Value;
 import mockwebserver3.Dispatcher;
@@ -1313,6 +1314,114 @@ class FlipswitchProviderTest {
     void flagEvaluation_asString_null_returnsNull() {
         FlagEvaluation eval = new FlagEvaluation("key", null, null, null);
         assertNull(eval.asString());
+    }
+
+    // ========================================
+    // valueToObject - Isolated Tests
+    // ========================================
+
+    @Test
+    void valueToObject_boolean_returnsBoolean() throws Exception {
+        provider = createProvider();
+        assertEquals(true, provider.valueToObject(new Value(true)));
+        assertEquals(false, provider.valueToObject(new Value(false)));
+    }
+
+    @Test
+    void valueToObject_string_returnsString() throws Exception {
+        provider = createProvider();
+        assertEquals("hello", provider.valueToObject(new Value("hello")));
+        assertEquals("", provider.valueToObject(new Value("")));
+    }
+
+    @Test
+    void valueToObject_integer_returnsInteger() throws Exception {
+        provider = createProvider();
+        // Doubles with no fractional part are returned as integers
+        assertEquals(42, provider.valueToObject(new Value(42.0)));
+        assertEquals(0, provider.valueToObject(new Value(0.0)));
+        assertEquals(-5, provider.valueToObject(new Value(-5.0)));
+    }
+
+    @Test
+    void valueToObject_double_returnsDouble() throws Exception {
+        provider = createProvider();
+        assertEquals(3.14, provider.valueToObject(new Value(3.14)));
+        assertEquals(-0.5, provider.valueToObject(new Value(-0.5)));
+    }
+
+    @Test
+    void valueToObject_emptyList_returnsEmptyList() throws Exception {
+        provider = createProvider();
+        Object result = provider.valueToObject(new Value(List.of()));
+        assertInstanceOf(List.class, result);
+        assertEquals(0, ((List<?>) result).size());
+    }
+
+    @Test
+    void valueToObject_listOfMixedValues_returnsList() throws Exception {
+        provider = createProvider();
+        List<Value> values = List.of(new Value("a"), new Value(1.0), new Value(true));
+        Object result = provider.valueToObject(new Value(values));
+        assertInstanceOf(List.class, result);
+        List<?> list = (List<?>) result;
+        assertEquals(3, list.size());
+        assertEquals("a", list.get(0));
+        assertEquals(1, list.get(1));    // 1.0 → integer
+        assertEquals(true, list.get(2));
+    }
+
+    @Test
+    void valueToObject_nestedList_returnsNestedList() throws Exception {
+        provider = createProvider();
+        List<Value> inner = List.of(new Value("nested"));
+        List<Value> outer = List.of(new Value(inner));
+        Object result = provider.valueToObject(new Value(outer));
+        assertInstanceOf(List.class, result);
+        List<?> outerList = (List<?>) result;
+        assertInstanceOf(List.class, outerList.get(0));
+        assertEquals("nested", ((List<?>) outerList.get(0)).get(0));
+    }
+
+    @Test
+    void valueToObject_structure_returnsMap() throws Exception {
+        provider = createProvider();
+        MutableStructure struct = new MutableStructure();
+        struct.add("name", "Alice");
+        struct.add("age", 30.0);
+        Object result = provider.valueToObject(new Value(struct));
+        assertInstanceOf(Map.class, result);
+        Map<?, ?> map = (Map<?, ?>) result;
+        assertEquals("Alice", map.get("name"));
+        assertEquals(30, map.get("age"));  // 30.0 → integer
+    }
+
+    @Test
+    void valueToObject_nestedStructure_returnsNestedMap() throws Exception {
+        provider = createProvider();
+        MutableStructure inner = new MutableStructure();
+        inner.add("city", "Stockholm");
+        MutableStructure outer = new MutableStructure();
+        outer.add("address", inner);
+        Object result = provider.valueToObject(new Value(outer));
+        assertInstanceOf(Map.class, result);
+        Map<?, ?> outerMap = (Map<?, ?>) result;
+        assertInstanceOf(Map.class, outerMap.get("address"));
+        assertEquals("Stockholm", ((Map<?, ?>) outerMap.get("address")).get("city"));
+    }
+
+    @Test
+    void valueToObject_nullValue_returnsNull() throws Exception {
+        provider = createProvider();
+        // Default Value() constructor creates a null value
+        assertNull(provider.valueToObject(new Value()));
+    }
+
+    @Test
+    void valueToObject_instantValue_returnsNull() throws Exception {
+        provider = createProvider();
+        // Instant is not handled by valueToObject, falls through to null
+        assertNull(provider.valueToObject(new Value(java.time.Instant.now())));
     }
 
     // ========================================
