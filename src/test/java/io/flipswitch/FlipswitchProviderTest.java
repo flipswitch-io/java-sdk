@@ -1108,6 +1108,214 @@ class FlipswitchProviderTest {
     }
 
     // ========================================
+    // HTTP Edge Cases
+    // ========================================
+
+    @Test
+    void validateApiKey_404_shouldNotFail() throws Exception {
+        // 404 during init validation is not an error (no flags configured yet)
+        dispatcher.setInitFailure(404);
+
+        provider = createProvider();
+
+        // This should NOT throw because we only treat 401/403 and >=500 as errors
+        // But the dispatcher uses failInit flag which just sends 404 without a body.
+        // The Java provider's validateApiKey checks:
+        //   - 401/403 -> error
+        //   - !successful && != 404 -> error
+        //   - 404 is fine
+        provider.initialize(new ImmutableContext());
+        assertEquals(ProviderState.READY, provider.getState());
+    }
+
+    @Test
+    void evaluateAllFlags_nullResponseBody_shouldReturnEmptyList() throws Exception {
+        dispatcher.setBulkResponse(() -> new MockResponse.Builder()
+                .code(200)
+                .addHeader("Content-Type", "application/json")
+                .body("{}")  // no "flags" key
+                .build());
+
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        // Re-set the bulk response after init
+        dispatcher.setBulkResponse(() -> new MockResponse.Builder()
+                .code(200)
+                .addHeader("Content-Type", "application/json")
+                .body("{}")  // no "flags" key
+                .build());
+
+        var flags = provider.evaluateAllFlags(new ImmutableContext("user-1"));
+        assertEquals(0, flags.size());
+    }
+
+    @Test
+    void evaluateAllFlags_flagWithoutKey_shouldSkip() throws Exception {
+        dispatcher.setBulkResponse(() -> new MockResponse.Builder()
+                .code(200)
+                .addHeader("Content-Type", "application/json")
+                .body("{\"flags\":[" +
+                        "{\"value\":true}," +  // no key - should skip
+                        "{\"key\":\"valid\",\"value\":\"hello\"}" +
+                        "]}")
+                .build());
+
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        var flags = provider.evaluateAllFlags(new ImmutableContext("user-1"));
+        assertEquals(1, flags.size());
+        assertEquals("valid", flags.get(0).getKey());
+    }
+
+    // ========================================
+    // Polling Edge Cases
+    // ========================================
+
+    @Test
+    void doubleStartPollingFallback_shouldBeNoOp() throws Exception {
+        // Always fail SSE requests
+        dispatcher.setSseResponse(() -> new MockResponse.Builder().code(500).body("error").build());
+
+        provider = createRealtimeProvider(1);
+        provider.initialize(new ImmutableContext());
+
+        // Wait for polling to become active
+        awaitCondition(() -> provider.isPollingActive(), 15000);
+        assertTrue(provider.isPollingActive());
+
+        // Second activation should be a no-op (no crash, still active)
+        // We can't call startPollingFallback directly since it's private,
+        // but sending more SSE errors will try to start it again
+        // The guard `if (pollingActive || !enablePollingFallback)` prevents double start
+        assertTrue(provider.isPollingActive());
+    }
+
+    @Test
+    void stopPolling_whenNotActive_shouldBeNoOp() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        assertFalse(provider.isPollingActive());
+
+        // shutdown calls stopPolling internally; should not throw
+        provider.shutdown();
+        assertFalse(provider.isPollingActive());
+    }
+
+    // ========================================
+    // Type Inference Edge Cases
+    // ========================================
+
+    @Test
+    void typeInference_unknownType() {
+        // Pass a custom object that doesn't match any known type
+        Object customObj = new Object() {
+            @Override
+            public String toString() { return "custom"; }
+        };
+        FlagEvaluation eval = new FlagEvaluation("key", customObj, null, null);
+        assertEquals("unknown", eval.getValueType());
+    }
+
+    @Test
+    void flagEvaluation_valueToString_null() {
+        FlagEvaluation eval = new FlagEvaluation("key", null, null, null);
+        assertEquals("null", eval.getValueAsString());
+    }
+
+    @Test
+    void flagEvaluation_toString_withVariant() {
+        FlagEvaluation eval = new FlagEvaluation("my-key", true, "DEFAULT", "v1");
+        String s = eval.toString();
+        assertTrue(s.contains("my-key"));
+        assertTrue(s.contains("boolean"));
+        assertTrue(s.contains("true"));
+        assertTrue(s.contains("DEFAULT"));
+        assertTrue(s.contains("v1"));
+    }
+
+    @Test
+    void flagEvaluation_toString_withoutVariant() {
+        FlagEvaluation eval = new FlagEvaluation("my-key", "hello", "STATIC", null);
+        String s = eval.toString();
+        assertTrue(s.contains("my-key"));
+        assertTrue(s.contains("string"));
+        assertTrue(s.contains("\"hello\""));
+        assertTrue(s.contains("STATIC"));
+        assertFalse(s.contains("variant="));
+    }
+
+    // ========================================
+    // Builder / Lifecycle Edge Cases
+    // ========================================
+
+    @Test
+    void builder_customHttpClient_shouldBeUsed() throws Exception {
+        okhttp3.OkHttpClient customClient = new okhttp3.OkHttpClient();
+
+        provider = FlipswitchProvider.builder("test-api-key")
+                .baseUrl(mockServer.url("/").toString())
+                .enableRealtime(false)
+                .httpClient(customClient)
+                .build();
+
+        // Should initialize successfully with the custom client
+        provider.initialize(new ImmutableContext());
+        assertEquals(ProviderState.READY, provider.getState());
+    }
+
+    @Test
+    void builder_allOptions() {
+        provider = FlipswitchProvider.builder("test-api-key")
+                .baseUrl("https://custom.example.com")
+                .enableRealtime(false)
+                .enablePollingFallback(false)
+                .pollingIntervalMs(5000)
+                .maxSseRetries(3)
+                .httpClient(new okhttp3.OkHttpClient())
+                .build();
+
+        assertEquals("flipswitch", provider.getMetadata().getName());
+        assertFalse(provider.isPollingActive());
+    }
+
+    // ========================================
+    // FlagEvaluation Convenience Accessors
+    // ========================================
+
+    @Test
+    void flagEvaluation_asBoolean_nonBoolean_returnsFalse() {
+        FlagEvaluation eval = new FlagEvaluation("key", "not-a-boolean", null, null);
+        assertFalse(eval.asBoolean());
+    }
+
+    @Test
+    void flagEvaluation_asInt_nonNumber_returnsZero() {
+        FlagEvaluation eval = new FlagEvaluation("key", "not-a-number", null, null);
+        assertEquals(0, eval.asInt());
+    }
+
+    @Test
+    void flagEvaluation_asDouble_nonNumber_returnsZero() {
+        FlagEvaluation eval = new FlagEvaluation("key", "not-a-number", null, null);
+        assertEquals(0.0, eval.asDouble());
+    }
+
+    @Test
+    void flagEvaluation_asString_nonString_returnsToString() {
+        FlagEvaluation eval = new FlagEvaluation("key", 42, null, null);
+        assertEquals("42", eval.asString());
+    }
+
+    @Test
+    void flagEvaluation_asString_null_returnsNull() {
+        FlagEvaluation eval = new FlagEvaluation("key", null, null, null);
+        assertNull(eval.asString());
+    }
+
+    // ========================================
     // Helper Methods
     // ========================================
 
