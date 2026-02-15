@@ -354,7 +354,11 @@ public class FlipswitchProvider extends EventProvider {
         }
 
         // Emit configuration changed event - OpenFeature clients will re-evaluate flags
-        emitProviderConfigurationChanged(ProviderEventDetails.builder().build());
+        ProviderEventDetails.ProviderEventDetailsBuilder<?, ?> detailsBuilder = ProviderEventDetails.builder();
+        if (event.flagKey() != null) {
+            detailsBuilder.flagsChanged(List.of(event.flagKey()));
+        }
+        emitProviderConfigurationChanged(detailsBuilder.build());
     }
 
     /**
