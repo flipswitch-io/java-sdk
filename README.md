@@ -132,21 +132,19 @@ boolean showFeature = client.getBooleanValue("new-feature", false, context);
 Listen for flag changes:
 
 ```java
+// Listen for all flag changes (flagKey is null for bulk invalidation)
 provider.addFlagChangeListener(event -> {
-    if (event.flagKey() != null) {
-        System.out.println("Flag changed: " + event.flagKey());
-    } else {
-        System.out.println("All flags invalidated");
-    }
-    System.out.println("Timestamp: " + event.getTimestampAsInstant());
+    System.out.println("Flag changed: " + event.flagKey());
 });
 
-// Check SSE status
-SseClient.ConnectionStatus status = provider.getSseStatus();
-// CONNECTING, CONNECTED, DISCONNECTED, ERROR
+// Listen for a specific flag (also fires on bulk invalidation)
+Runnable cancel = provider.addFlagChangeListener("dark-mode", event -> {
+    System.out.println("dark-mode changed, re-evaluating...");
+});
+cancel.run(); // stop listening
 
-// Force reconnect
-provider.reconnectSse();
+provider.getSseStatus();  // current status
+provider.reconnectSse();  // force reconnect
 ```
 
 ### Bulk Flag Evaluation
