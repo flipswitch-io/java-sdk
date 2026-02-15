@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -64,6 +65,7 @@ public class FlipswitchProvider extends EventProvider {
     private final JsonAdapter<Map<String, Object>> mapAdapter;
     private final OfrepProvider ofrepProvider;
     private final CopyOnWriteArrayList<Consumer<FlagChangeEvent>> flagChangeListeners;
+    private final ConcurrentHashMap<String, CopyOnWriteArrayList<Consumer<FlagChangeEvent>>> keyFlagChangeListeners;
 
     // Polling fallback configuration
     private final boolean enablePollingFallback;
@@ -86,6 +88,7 @@ public class FlipswitchProvider extends EventProvider {
         Type mapType = Types.newParameterizedType(Map.class, String.class, Object.class);
         this.mapAdapter = moshi.adapter(mapType);
         this.flagChangeListeners = new CopyOnWriteArrayList<>();
+        this.keyFlagChangeListeners = new ConcurrentHashMap<>();
 
         // Polling fallback configuration
         this.enablePollingFallback = builder.enablePollingFallback;
@@ -344,12 +347,38 @@ public class FlipswitchProvider extends EventProvider {
      * Emits PROVIDER_CONFIGURATION_CHANGED to trigger re-evaluation.
      */
     private void handleFlagChange(FlagChangeEvent event) {
-        // Notify user-registered listeners
+        // Notify global listeners
         for (Consumer<FlagChangeEvent> listener : flagChangeListeners) {
             try {
                 listener.accept(event);
             } catch (Exception e) {
                 log.error("Error in flag change listener: {}", e.getMessage());
+            }
+        }
+
+        // Notify key-specific listeners
+        if (event.flagKey() != null) {
+            // Targeted change — fire only matching key listeners
+            CopyOnWriteArrayList<Consumer<FlagChangeEvent>> listeners = keyFlagChangeListeners.get(event.flagKey());
+            if (listeners != null) {
+                for (Consumer<FlagChangeEvent> listener : listeners) {
+                    try {
+                        listener.accept(event);
+                    } catch (Exception e) {
+                        log.error("Error in flag change listener: {}", e.getMessage());
+                    }
+                }
+            }
+        } else {
+            // Bulk invalidation — fire ALL key-specific listeners
+            for (CopyOnWriteArrayList<Consumer<FlagChangeEvent>> listeners : keyFlagChangeListeners.values()) {
+                for (Consumer<FlagChangeEvent> listener : listeners) {
+                    try {
+                        listener.accept(event);
+                    } catch (Exception e) {
+                        log.error("Error in flag change listener: {}", e.getMessage());
+                    }
+                }
             }
         }
 
@@ -362,17 +391,59 @@ public class FlipswitchProvider extends EventProvider {
     }
 
     /**
-     * Add a listener for flag change events.
+     * Add a listener for all flag change events.
+     *
+     * @param listener The listener to add.
+     * @return A {@link Runnable} that removes the listener when called.
      */
-    public void addFlagChangeListener(Consumer<FlagChangeEvent> listener) {
+    public Runnable addFlagChangeListener(Consumer<FlagChangeEvent> listener) {
         flagChangeListeners.add(listener);
+        return () -> flagChangeListeners.remove(listener);
     }
 
     /**
-     * Remove a flag change listener.
+     * Add a listener for changes to a specific flag key.
+     * The listener fires on targeted changes matching the key AND on bulk invalidations
+     * (events with null flagKey).
+     *
+     * @param flagKey  The flag key to listen for.
+     * @param listener The listener to add.
+     * @return A {@link Runnable} that removes the listener when called.
+     */
+    public Runnable addFlagChangeListener(String flagKey, Consumer<FlagChangeEvent> listener) {
+        keyFlagChangeListeners.computeIfAbsent(flagKey, k -> new CopyOnWriteArrayList<>()).add(listener);
+        return () -> {
+            CopyOnWriteArrayList<Consumer<FlagChangeEvent>> listeners = keyFlagChangeListeners.get(flagKey);
+            if (listeners != null) {
+                listeners.remove(listener);
+                if (listeners.isEmpty()) {
+                    keyFlagChangeListeners.remove(flagKey, listeners);
+                }
+            }
+        };
+    }
+
+    /**
+     * Remove a global flag change listener.
      */
     public void removeFlagChangeListener(Consumer<FlagChangeEvent> listener) {
         flagChangeListeners.remove(listener);
+    }
+
+    /**
+     * Remove a flag-key-specific change listener.
+     *
+     * @param flagKey  The flag key the listener was registered for.
+     * @param listener The listener to remove.
+     */
+    public void removeFlagChangeListener(String flagKey, Consumer<FlagChangeEvent> listener) {
+        CopyOnWriteArrayList<Consumer<FlagChangeEvent>> listeners = keyFlagChangeListeners.get(flagKey);
+        if (listeners != null) {
+            listeners.remove(listener);
+            if (listeners.isEmpty()) {
+                keyFlagChangeListeners.remove(flagKey, listeners);
+            }
+        }
     }
 
     /**

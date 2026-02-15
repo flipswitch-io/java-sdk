@@ -1538,6 +1538,151 @@ class FlipswitchProviderTest {
     }
 
     // ========================================
+    // Flag-Key-Specific Listener Tests
+    // ========================================
+
+    @Test
+    void flagKeyListener_firesOnMatchingKey() throws Exception {
+        String flagJson = "{\"flagKey\":\"dark-mode\",\"timestamp\":\"2024-01-01T00:00:00Z\"}";
+        dispatcher.setSseResponse(() -> sseResponse(sseFrame("flag-updated", flagJson)));
+
+        CountDownLatch eventLatch = new CountDownLatch(1);
+        AtomicReference<FlagChangeEvent> receivedEvent = new AtomicReference<>();
+
+        provider = createRealtimeProvider();
+        provider.addFlagChangeListener("dark-mode", event -> {
+            receivedEvent.set(event);
+            eventLatch.countDown();
+        });
+        provider.initialize(new ImmutableContext());
+
+        assertTrue(eventLatch.await(5, TimeUnit.SECONDS), "Should receive flag change event for dark-mode");
+        assertNotNull(receivedEvent.get());
+        assertEquals("dark-mode", receivedEvent.get().flagKey());
+    }
+
+    @Test
+    void flagKeyListener_doesNotFireOnNonMatchingKey() throws Exception {
+        String flagJson = "{\"flagKey\":\"other-flag\",\"timestamp\":\"2024-01-01T00:00:00Z\"}";
+        dispatcher.setSseResponse(() -> sseResponse(sseFrame("flag-updated", flagJson)));
+
+        CountDownLatch globalLatch = new CountDownLatch(1);
+        AtomicInteger keyListenerCount = new AtomicInteger(0);
+
+        provider = createRealtimeProvider();
+        provider.addFlagChangeListener("dark-mode", event -> keyListenerCount.incrementAndGet());
+        provider.addFlagChangeListener(event -> globalLatch.countDown());
+        provider.initialize(new ImmutableContext());
+
+        assertTrue(globalLatch.await(5, TimeUnit.SECONDS), "Global listener should fire");
+        // Give a moment for any delayed key listener calls
+        Thread.sleep(100);
+        assertEquals(0, keyListenerCount.get(), "Key listener should NOT fire for non-matching key");
+    }
+
+    @Test
+    void flagKeyListener_firesOnBulkInvalidation() throws Exception {
+        String configJson = "{\"timestamp\":\"2024-01-01T00:00:00Z\"}";
+        dispatcher.setSseResponse(() -> sseResponse(sseFrame("config-updated", configJson)));
+
+        CountDownLatch eventLatch = new CountDownLatch(1);
+        AtomicReference<FlagChangeEvent> receivedEvent = new AtomicReference<>();
+
+        provider = createRealtimeProvider();
+        provider.addFlagChangeListener("dark-mode", event -> {
+            receivedEvent.set(event);
+            eventLatch.countDown();
+        });
+        provider.initialize(new ImmutableContext());
+
+        assertTrue(eventLatch.await(5, TimeUnit.SECONDS), "Key listener should fire on bulk invalidation");
+        assertNotNull(receivedEvent.get());
+        assertNull(receivedEvent.get().flagKey(), "flagKey should be null for config-updated");
+    }
+
+    @Test
+    void flagKeyListener_unsubscribeWorks() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        AtomicInteger count = new AtomicInteger(0);
+        Runnable unsub = provider.addFlagChangeListener("dark-mode", event -> count.incrementAndGet());
+        unsub.run();
+
+        // Verify the listener list is empty for this key
+        assertEquals(0, count.get());
+    }
+
+    @Test
+    void flagKeyListener_globalUnsubscribeWorks() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        AtomicInteger count = new AtomicInteger(0);
+        Runnable unsub = provider.addFlagChangeListener(event -> count.incrementAndGet());
+        unsub.run();
+
+        assertEquals(0, count.get());
+    }
+
+    @Test
+    void flagKeyListener_multipleListenersForSameKey() throws Exception {
+        String flagJson = "{\"flagKey\":\"dark-mode\",\"timestamp\":\"2024-01-01T00:00:00Z\"}";
+        dispatcher.setSseResponse(() -> sseResponse(sseFrame("flag-updated", flagJson)));
+
+        CountDownLatch latch = new CountDownLatch(2);
+        AtomicInteger count1 = new AtomicInteger(0);
+        AtomicInteger count2 = new AtomicInteger(0);
+
+        provider = createRealtimeProvider();
+        provider.addFlagChangeListener("dark-mode", event -> {
+            count1.incrementAndGet();
+            latch.countDown();
+        });
+        provider.addFlagChangeListener("dark-mode", event -> {
+            count2.incrementAndGet();
+            latch.countDown();
+        });
+        provider.initialize(new ImmutableContext());
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "Both key listeners should fire");
+        assertEquals(1, count1.get());
+        assertEquals(1, count2.get());
+    }
+
+    @Test
+    void flagKeyListener_exceptionIsolated() throws Exception {
+        String flagJson = "{\"flagKey\":\"dark-mode\",\"timestamp\":\"2024-01-01T00:00:00Z\"}";
+        dispatcher.setSseResponse(() -> sseResponse(sseFrame("flag-updated", flagJson)));
+
+        CountDownLatch eventLatch = new CountDownLatch(1);
+
+        provider = createRealtimeProvider();
+        provider.addFlagChangeListener("dark-mode", event -> {
+            throw new RuntimeException("Listener error");
+        });
+        provider.addFlagChangeListener("dark-mode", event -> eventLatch.countDown());
+        provider.initialize(new ImmutableContext());
+
+        assertTrue(eventLatch.await(5, TimeUnit.SECONDS),
+                "Second key listener should be called despite first throwing");
+    }
+
+    @Test
+    void flagKeyListener_removeFlagChangeListenerByKey() throws Exception {
+        provider = createProvider();
+        provider.initialize(new ImmutableContext());
+
+        AtomicInteger count = new AtomicInteger(0);
+        Consumer<FlagChangeEvent> listener = event -> count.incrementAndGet();
+
+        provider.addFlagChangeListener("dark-mode", listener);
+        provider.removeFlagChangeListener("dark-mode", listener);
+
+        assertEquals(0, count.get());
+    }
+
+    // ========================================
     // Helper Methods
     // ========================================
 
