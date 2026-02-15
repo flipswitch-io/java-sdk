@@ -1,8 +1,10 @@
 package io.flipswitch;
 
+import dev.openfeature.sdk.EventDetails;
 import dev.openfeature.sdk.ImmutableContext;
 import dev.openfeature.sdk.MutableContext;
 import dev.openfeature.sdk.MutableStructure;
+import dev.openfeature.sdk.OpenFeatureAPI;
 import dev.openfeature.sdk.ProviderState;
 import dev.openfeature.sdk.Value;
 import mockwebserver3.Dispatcher;
@@ -901,6 +903,117 @@ class FlipswitchProviderTest {
 
         assertTrue(eventLatch.await(5, TimeUnit.SECONDS),
                 "Second listener should be called despite first listener throwing");
+    }
+
+    // ========================================
+    // Flag Change Event Details Tests
+    // ========================================
+
+    @Test
+    void flagChangeEventDetails_flagUpdated_shouldIncludeFlagKeyInFlagsChanged() throws Exception {
+        String flagJson = "{\"flagKey\":\"my-feature\",\"timestamp\":\"2024-01-01T00:00:00Z\"}";
+
+        // First SSE request: heartbeat only (during initialization).
+        // Subsequent requests deliver the flag-updated event (after OpenFeature event wiring is complete).
+        AtomicInteger sseRequestCount = new AtomicInteger(0);
+        dispatcher.setSseResponse(() -> {
+            int count = sseRequestCount.incrementAndGet();
+            if (count == 1) {
+                return sseResponse(sseFrame("heartbeat", "{}"));
+            }
+            return sseResponse(sseFrame("flag-updated", flagJson));
+        });
+
+        CountDownLatch eventLatch = new CountDownLatch(1);
+        AtomicReference<EventDetails> receivedDetails = new AtomicReference<>();
+
+        provider = createRealtimeProvider();
+
+        OpenFeatureAPI api = OpenFeatureAPI.getInstance();
+
+        try {
+            // Register event handler BEFORE setting provider to avoid race condition.
+            // Filter for events that have flagsChanged (to distinguish from other config changed events).
+            api.onProviderConfigurationChanged(details -> {
+                if (details.getFlagsChanged() != null && !details.getFlagsChanged().isEmpty()) {
+                    receivedDetails.set(details);
+                    eventLatch.countDown();
+                }
+            });
+
+            api.setProviderAndWait(provider);
+
+            // Wait for SSE to connect, close, and reconnect with the flag-updated event
+            assertTrue(eventLatch.await(10, TimeUnit.SECONDS),
+                    "Should receive PROVIDER_CONFIGURATION_CHANGED event with flagsChanged");
+
+            EventDetails details = receivedDetails.get();
+            assertNotNull(details);
+            assertNotNull(details.getFlagsChanged(), "flagsChanged should not be null for flag-updated event");
+            assertEquals(1, details.getFlagsChanged().size());
+            assertEquals("my-feature", details.getFlagsChanged().get(0));
+        } finally {
+            api.shutdown();
+            provider = null; // Prevent double-shutdown in @AfterEach
+        }
+    }
+
+    @Test
+    void flagChangeEventDetails_configUpdated_shouldHaveEmptyFlagsChanged() throws Exception {
+        String configJson = "{\"timestamp\":\"2024-01-01T00:00:00Z\"}";
+
+        // First SSE request: heartbeat only (during initialization).
+        // Subsequent requests deliver the config-updated event (after OpenFeature event wiring is complete).
+        AtomicInteger sseRequestCount = new AtomicInteger(0);
+        dispatcher.setSseResponse(() -> {
+            int count = sseRequestCount.incrementAndGet();
+            if (count == 1) {
+                return sseResponse(sseFrame("heartbeat", "{}"));
+            }
+            return sseResponse(sseFrame("config-updated", configJson));
+        });
+
+        CountDownLatch listenerLatch = new CountDownLatch(1);
+        CountDownLatch eventLatch = new CountDownLatch(1);
+        AtomicReference<EventDetails> receivedDetails = new AtomicReference<>();
+
+        provider = createRealtimeProvider();
+        // Use a direct flag change listener to detect when the config-updated event has been processed
+        provider.addFlagChangeListener(event -> {
+            if (event.flagKey() == null) {
+                listenerLatch.countDown();
+            }
+        });
+
+        OpenFeatureAPI api = OpenFeatureAPI.getInstance();
+
+        try {
+            // Register event handler BEFORE setting provider
+            api.onProviderConfigurationChanged(details -> {
+                if (details.getFlagsChanged() == null || details.getFlagsChanged().isEmpty()) {
+                    receivedDetails.set(details);
+                    eventLatch.countDown();
+                }
+            });
+
+            api.setProviderAndWait(provider);
+
+            // Wait for the config-updated SSE event to arrive via direct listener
+            assertTrue(listenerLatch.await(10, TimeUnit.SECONDS),
+                    "Should receive config-updated event via direct listener");
+
+            // Now wait for the OpenFeature event
+            assertTrue(eventLatch.await(10, TimeUnit.SECONDS),
+                    "Should receive PROVIDER_CONFIGURATION_CHANGED event for config-updated");
+
+            EventDetails details = receivedDetails.get();
+            assertNotNull(details);
+            assertTrue(details.getFlagsChanged() == null || details.getFlagsChanged().isEmpty(),
+                    "flagsChanged should be null or empty for config-updated event (full invalidation)");
+        } finally {
+            api.shutdown();
+            provider = null; // Prevent double-shutdown in @AfterEach
+        }
     }
 
     @Test
