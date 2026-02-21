@@ -55,7 +55,7 @@
         <moshi.version>1.15.2</moshi.version>
         <okhttp.version>5.3.2</okhttp.version>
         <okio.version>3.16.4</okio.version>
-        <junit.version>6.0.2</junit.version>
+        <junit.version>6.0.3</junit.version>
         <mockito.version>5.21.0</mockito.version>
     </properties>
 
