@@ -54,7 +54,7 @@
         <ofrep.version>0.0.2</ofrep.version>
         <moshi.version>1.15.2</moshi.version>
         <okhttp.version>5.4.0</okhttp.version>
-        <okio.version>3.17.0</okio.version>
+        <okio.version>3.18.0</okio.version>
         <junit.version>6.1.2</junit.version>
         <mockito.version>5.23.0</mockito.version>
     </properties>
